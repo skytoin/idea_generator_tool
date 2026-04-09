@@ -12,12 +12,44 @@ export const anthropicHandler = http.post(
     }),
 );
 
-/**
- * Build the chat/completions-shaped response for a scenario or a default.
- * The same payload is reused for both /chat/completions and /responses
- * endpoints since the Vercel AI SDK normalizes whichever it sees.
- */
-async function handleOpenAIRequest(request: Request): Promise<Response> {
+/** Build a chat/completions-shaped JSON body for a content string. */
+function chatCompletionsBody(content: string, model: string, usage?: unknown) {
+  return {
+    id: 'chatcmpl-test',
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content },
+        finish_reason: 'stop',
+      },
+    ],
+    model,
+    usage,
+  };
+}
+
+/** Build a /v1/responses-shaped JSON body for a content string. */
+function responsesBody(content: string, model: string, usage?: unknown) {
+  return {
+    id: 'resp-test',
+    created_at: 0,
+    model,
+    output: [
+      {
+        type: 'message',
+        role: 'assistant',
+        id: 'msg-test',
+        content: [{ type: 'output_text', text: content, annotations: [] }],
+      },
+    ],
+    usage,
+  };
+}
+
+/** Resolve the content string from a scenario lookup or fall back to a stub. */
+async function resolveContentForRequest(
+  request: Request,
+): Promise<{ content: string; model: string; usage?: unknown }> {
   let body: unknown = undefined;
   try {
     body = await request.json();
@@ -28,29 +60,32 @@ async function handleOpenAIRequest(request: Request): Promise<Response> {
   if (scenario) {
     const registered = getOpenAIResponse(scenario);
     if (registered) {
-      return HttpResponse.json({
-        choices: [{ message: { content: registered.content } }],
+      return {
+        content: registered.content,
         model: registered.model ?? 'gpt-4o',
         usage: registered.usage,
-      });
+      };
     }
   }
-  return HttpResponse.json({
-    choices: [{ message: { content: '{"ideas": []}' } }],
-    model: 'gpt-4o',
-  });
+  return { content: '{"ideas": []}', model: 'gpt-4o' };
 }
 
 /** Mock OpenAI chat/completions endpoint with scenario routing */
 export const openaiChatHandler = http.post(
   'https://api.openai.com/v1/chat/completions',
-  ({ request }) => handleOpenAIRequest(request),
+  async ({ request }) => {
+    const { content, model, usage } = await resolveContentForRequest(request);
+    return HttpResponse.json(chatCompletionsBody(content, model, usage));
+  },
 );
 
 /** Mock OpenAI responses endpoint (Vercel AI SDK v6 structured output path) */
 export const openaiResponsesHandler = http.post(
   'https://api.openai.com/v1/responses',
-  ({ request }) => handleOpenAIRequest(request),
+  async ({ request }) => {
+    const { content, model, usage } = await resolveContentForRequest(request);
+    return HttpResponse.json(responsesBody(content, model, usage));
+  },
 );
 
 /** Mock Google Gemini API response */

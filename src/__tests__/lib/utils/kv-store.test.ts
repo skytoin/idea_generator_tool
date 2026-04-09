@@ -71,4 +71,14 @@ describe('InMemoryKVStore', () => {
     expect(await kv.get('b')).toBeNull();
     expect(await kv.get('c')).toBe('3');
   });
+
+  it('clear removes every key', async () => {
+    const kv = new InMemoryKVStore();
+    await kv.set('a', '1');
+    await kv.set('b', '2');
+    kv.clear();
+    expect(await kv.get('a')).toBeNull();
+    expect(await kv.get('b')).toBeNull();
+    expect(await kv.has('a')).toBe(false);
+  });
 });

@@ -42,4 +42,13 @@ export class InMemoryKVStore implements KVStore {
   async has(key: string): Promise<boolean> {
     return this.store.has(key);
   }
+
+  /**
+   * Remove every key from the store. Not part of the KVStore interface —
+   * intended for tests and module-singleton reset helpers where a sync
+   * wipe is needed.
+   */
+  clear(): void {
+    this.store.clear();
+  }
 }

@@ -4,10 +4,7 @@ import {
   FRAME_INPUT_SCHEMA,
   type FrameInput,
 } from '../../lib/types/frame-input';
-import {
-  FRAME_OUTPUT_SCHEMA,
-  type FrameOutput,
-} from '../../lib/types/frame-output';
+import type { FrameOutput } from '../../lib/types/frame-output';
 import type { KVStore } from '../../lib/utils/kv-store';
 import type { FounderProfile } from '../../lib/types/founder-profile';
 import { extractProfile } from '../frame/extract-profile';

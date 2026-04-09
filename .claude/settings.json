@@ -1,0 +1,84 @@
+{
+    "permissions": {
+      "allow": [
+        "Read",
+        "Edit",
+        "Write",
+        "Glob",
+        "Grep",
+        "Bash(npm run test*)",
+        "Bash(npm run typecheck)",
+        "Bash(npm run lint*)",
+        "Bash(npm run format*)",
+        "Bash(npm run dev)",
+        "Bash(npm run build)",
+        "Bash(npx prettier*)",
+        "Bash(npx vitest*)",
+        "Bash(git add*)",
+        "Bash(git commit*)",
+        "Bash(git status)",
+        "Bash(git diff*)",
+        "Bash(git log*)",
+        "Bash(cat *)",
+        "Bash(ls *)",
+        "Bash(mkdir *)"
+      ],
+      "deny": [
+        "Bash(git push --force*)",
+        "Bash(rm -rf *)",
+        "Bash(npm publish*)"
+      ]
+    },
+    "hooks": {
+      "PostToolUse": [
+        {
+          "matcher": "Edit|Write|MultiEdit",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "set -euo pipefail; file_path=$(jq -r '.tool_input.file_path // \"\"'); [[ \"$file_path\" =~ \\.(ts|tsx|js|jsx|json|css|md)$ ]] || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && npx prettier --write \"$file_path\" 2>/dev/null; exit 0",
+              "timeout": 15,
+              "statusMessage": "Formatting..."
+            }
+          ]
+        },
+        {
+          "matcher": "Edit|Write|MultiEdit",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "set -euo pipefail; file_path=$(jq -r '.tool_input.file_path // \"\"'); [[ \"$file_path\" =~ \\.(ts|tsx)$ ]] || exit 0; cd \"$CLAUDE_PROJECT_DIR\" && npx eslint --fix \"$file_path\" 2>/dev/null; exit 0",
+              "timeout": 15,
+              "statusMessage": "Linting..."
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "set -euo pipefail; stop_active=$(jq -r '.stop_hook_active // false'); [[ \"$stop_active\" == \"true\" ]] && exit 0; cd \"$CLAUDE_PROJECT_DIR\" && npx tsc --noEmit 2>&1 | head -30; exit 0",
+              "timeout": 30,
+              "statusMessage": "Type checking..."
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "Bash",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "cmd=$(jq -r '.tool_input.command // \"\"'); echo \"$cmd\" | grep -q 'git commit' || exit 0; git diff --cached --name-only | while read f; do wc -l < \"$f\" 2>/dev/null | { read lines; [[ $lines -gt 500 ]] && echo \"BLOCKED: $f has $lines lines (max 500)\" && exit 2; }; done; exit 0",
+              "timeout": 10,
+              "statusMessage": "Checking file lengths..."
+            }
+          ]
+        }
+      ]
+    }
+  }

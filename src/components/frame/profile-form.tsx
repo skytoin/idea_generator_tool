@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement } from 'react';
 import type { FrameInput } from '../../lib/types/frame-input';
 import { saveDraft, loadDraft } from '../../lib/frame/client-state';
 import { QUESTIONS, type Question, type QuestionTarget } from '../../pipeline/frame/questions';
@@ -198,9 +198,17 @@ type DrawerState = {
   question: Question | null;
 };
 
-/** Build a stable sessionId for the current form session using Math.random once. */
+/**
+ * Build a stable sessionId the first time the form mounts. Uses a lazy
+ * initializer in useState so Math.random is only called once, and only
+ * on the client. Starts empty during SSR, then hydrates on mount.
+ */
 function useSessionId(): string {
-  return useMemo(() => `session-${Math.random().toString(36).slice(2, 10)}`, []);
+  const [sessionId] = useState<string>(() => {
+    if (typeof globalThis === 'undefined') return '';
+    return `session-${Math.random().toString(36).slice(2, 10)}`;
+  });
+  return sessionId;
 }
 
 /**

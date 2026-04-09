@@ -16,6 +16,10 @@ See @docs/architecture.md for full diagram.
 - `npm run typecheck` — tsc --noEmit
 - `npm run lint` — ESLint
 - `npm run format` — Prettier write
+- `npm run frame:dry-run -- <fixture>` — Frame layer manual inspection
+
+## Pipeline Progress
+- **Layer 1 (Frame)**: complete. Inspect via `npm run frame:dry-run -- <fixture>` or visit `/debug/frame`.
 
 ## Code Rules — IMPORTANT
 - Files MUST be under 500 lines. Split if approaching limit.

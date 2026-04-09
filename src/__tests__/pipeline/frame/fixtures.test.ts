@@ -19,7 +19,6 @@ describe('Frame layer fixtures', () => {
     it(`${name} parses cleanly through FRAME_INPUT_SCHEMA`, () => {
       const result = FRAME_INPUT_SCHEMA.safeParse(data);
       if (!result.success) {
-        // eslint-disable-next-line no-console
         console.error(`${name} parse errors:`, result.error.flatten());
       }
       expect(result.success).toBe(true);

@@ -20,6 +20,7 @@ export const providers = {
  * The only rule: don't hardcode models in step files.
  */
 export const models = {
+  frame: openai('gpt-4o'),
   scanner: openai('gpt-4o-mini'),
   aggregator: anthropic('claude-sonnet-4-6'),
   generator1: anthropic('claude-sonnet-4-6'),

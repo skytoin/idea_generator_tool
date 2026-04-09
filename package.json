@@ -13,8 +13,9 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css,md}\"",
-    "check-all": "npm run typecheck && npm run lint && npm test"
-},
+    "check-all": "npm run typecheck && npm run lint && npm test",
+    "frame:dry-run": "tsx scripts/frame-dry-run.ts"
+  },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.68",
     "@ai-sdk/deepseek": "^2.0.29",
@@ -42,6 +43,7 @@
     "msw": "^2.13.2",
     "prettier": "^3.8.1",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5",
     "vitest": "^4.1.3"
   }

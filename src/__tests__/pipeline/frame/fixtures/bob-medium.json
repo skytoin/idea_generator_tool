@@ -1,0 +1,10 @@
+{
+  "mode": "explore",
+  "skills": ["TypeScript", "React", "Shopify Liquid", "Node.js"],
+  "time_per_week": "10",
+  "money_available": "lt_5k",
+  "ambition": "supplemental",
+  "domain": [{ "area": "e-commerce", "years": 3 }],
+  "anti_targets": ["gambling", "crypto"],
+  "additional_context": "I run a Shopify theme shop on the side with about 400 paying customers. Every week I get emails asking for theme features nobody has built yet. I know Shopify Liquid and the Partner API better than most Shopify devs I've met."
+}

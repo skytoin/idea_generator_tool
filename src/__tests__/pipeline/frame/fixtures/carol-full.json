@@ -1,0 +1,33 @@
+{
+  "mode": "refine",
+  "existing_idea": "A SOC-2 audit prep tool for solo founders that auto-collects evidence from GitHub, Vercel, and Stripe, organizes it into the right AICPA controls, and generates a board-ready report — all without needing a compliance consultant.",
+  "skills": [
+    "backend engineering",
+    "distributed systems",
+    "SOC-2 audit processes",
+    "technical writing"
+  ],
+  "time_per_week": "20",
+  "money_available": "lt_5k",
+  "ambition": "replace_income",
+  "domain": [
+    { "area": "payments", "years": 8 },
+    { "area": "fraud detection", "years": 5 },
+    { "area": "compliance tooling", "years": 2 }
+  ],
+  "insider_knowledge": "Fraud analysts at every payments company I've worked at manually copy evidence into audit spreadsheets for 3 weeks every year. It's tedious and error-prone and nobody has automated it because auditors don't want to rock the boat.",
+  "anti_targets": ["crypto", "gambling", "adult content", "defense"],
+  "network": "About 15 payments and fraud professionals from past jobs who I can text for feedback, plus a small Slack group of fintech engineers (~50 people).",
+  "audience": "Small Twitter following (~1200) in the fintech/fraud-detection niche; occasional blog posts on Substack (~300 subscribers).",
+  "proprietary_access": "Access to anonymized fraud pattern datasets from prior employers (with permission), paid subscriptions to fraud industry research (Aite-Novarica, Forrester).",
+  "rare_combinations": "Distributed systems engineering + first-hand fraud-analyst workflow knowledge + SOC-2 audit experience.",
+  "recurring_frustration": "Internal fraud tooling at every payments company is 5 years behind what's technically possible, because the people with the money to buy aren't the people who use the tools.",
+  "four_week_mvp": "A CLI that reads a GitHub repo and a Vercel project, matches files/settings against SOC-2 controls, and emits a PDF evidence bundle.",
+  "previous_attempts": "Tried building a 'fraud tooling' company in 2022, got as far as 5 customer interviews, killed it because the sales cycle was too long for a solo founder.",
+  "customer_affinity": "Solo technical founders building B2B SaaS in regulated industries — I am one and I understand their pain.",
+  "time_to_revenue": "2_months",
+  "customer_type_preference": "b2b",
+  "trigger": "My current employer is requiring every engineer to go through a SOC-2 evidence collection sprint and I realized the tooling is a joke.",
+  "legal_constraints": "Non-compete with current employer expires in 4 months, covers only direct-competitor products.",
+  "additional_context": "I've read every paper on multi-agent compliance systems I could find. I'm obsessed with the idea of turning audit prep from a 3-week panic into a continuous background process. Inspired by 'Seeing Like a State' and the way bureaucracies legitimize themselves through paperwork. I want this to become a lifestyle business I run from a cabin in Vermont, not a VC rocketship."
+}

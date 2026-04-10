@@ -96,6 +96,41 @@ function ProfileTable({ output }: { output: FrameOutput }): React.ReactElement {
   );
 }
 
+/**
+ * Render the verbatim additional_context_raw that the founder typed into
+ * the 'Anything else I should know about you?' box. Shown as its own
+ * section so the user can confirm their free-text note was captured.
+ * Displays a muted placeholder when the founder left it empty.
+ */
+function AdditionalContextSection({
+  output,
+}: {
+  output: FrameOutput;
+}): React.ReactElement {
+  const raw = output.profile.additional_context_raw;
+  const isEmpty = raw.trim().length === 0;
+  return (
+    <section className="mb-4">
+      <h2 className="text-xl font-bold">Additional Context (verbatim)</h2>
+      {isEmpty ? (
+        <p className="text-sm text-gray-500 italic">(empty — no free-text note submitted)</p>
+      ) : (
+        <pre
+          className="whitespace-pre-wrap border-l-4 border-blue-300 bg-blue-50 p-3 text-sm"
+          data-testid="additional-context-raw"
+        >
+          {raw}
+        </pre>
+      )}
+      <p className="text-xs text-gray-500 mt-1">
+        {raw.length} character{raw.length === 1 ? '' : 's'}. When non-empty, this text is
+        wrapped in a &lt;founder_notes&gt; block inside the narrative and every scanner
+        directive prompt.
+      </p>
+    </section>
+  );
+}
+
 /** Render the narrative prose and word count. */
 function NarrativeSection({ output }: { output: FrameOutput }): React.ReactElement {
   return (
@@ -107,7 +142,29 @@ function NarrativeSection({ output }: { output: FrameOutput }): React.ReactEleme
   );
 }
 
-/** Render a single scanner directive section. */
+/** Render the scanner-specific extra fields (target_sources, timeframe, etc.). */
+function ScannerExtraFields({
+  name,
+  directive,
+}: {
+  name: string;
+  directive: FrameOutput['directives'][keyof FrameOutput['directives']];
+}): React.ReactElement {
+  const d = directive as Record<string, unknown>;
+  const skip = new Set(['keywords', 'exclude', 'notes']);
+  const extras = Object.entries(d).filter(([k]) => !skip.has(k));
+  return (
+    <>
+      {extras.map(([k, v]) => (
+        <p key={`${name}-${k}`}>
+          <strong>{k}:</strong> {JSON.stringify(v)}
+        </p>
+      ))}
+    </>
+  );
+}
+
+/** Render a single scanner directive section, including scanner-specific fields. */
 function ScannerSection({
   name,
   directive,
@@ -116,7 +173,7 @@ function ScannerSection({
   directive: FrameOutput['directives'][keyof FrameOutput['directives']];
 }): React.ReactElement {
   return (
-    <details className="mb-2">
+    <details className="mb-2" open>
       <summary className="font-semibold cursor-pointer">{name}</summary>
       <div className="pl-4">
         <p>
@@ -128,6 +185,7 @@ function ScannerSection({
         <p>
           <strong>notes:</strong> {directive.notes}
         </p>
+        <ScannerExtraFields name={name} directive={directive} />
       </div>
     </details>
   );
@@ -145,13 +203,67 @@ function DirectivesPanel({ output }: { output: FrameOutput }): React.ReactElemen
   );
 }
 
-/** Render the trace summary and cost. */
-function TraceAndCost({ output }: { output: FrameOutput }): React.ReactElement {
+/**
+ * Group (field, consumer) trace pairs by field so the user can see at a
+ * glance which consumers each field influenced. Returns an array of
+ * [field, consumers[]] tuples sorted alphabetically by field name.
+ */
+function groupTraceByField(
+  trace: Array<{ field: string; consumer: string }>,
+): Array<[string, string[]]> {
+  const map = new Map<string, Set<string>>();
+  for (const { field, consumer } of trace) {
+    const set = map.get(field) ?? new Set<string>();
+    set.add(consumer);
+    map.set(field, set);
+  }
+  return Array.from(map.entries())
+    .map(([field, set]) => [field, Array.from(set).sort()] as [string, string[]])
+    .sort(([a], [b]) => a.localeCompare(b));
+}
+
+/**
+ * Render the trace section as an expandable table of field -> consumer[].
+ * Keeps the summary count for quick scanning but lets the founder drill
+ * in to see the exact mapping, which is the main evidence that every
+ * collected field flowed into at least one downstream consumer.
+ */
+function TraceSection({ output }: { output: FrameOutput }): React.ReactElement {
+  const grouped = groupTraceByField(output.debug.trace);
   return (
     <section className="mb-4">
       <h2 className="text-xl font-bold">Trace</h2>
-      <p>{output.debug.trace.length} field-&gt;consumer pairs</p>
-      <h2 className="text-xl font-bold mt-2">Cost</h2>
+      <details>
+        <summary className="cursor-pointer">
+          {output.debug.trace.length} field-&gt;consumer pairs across {grouped.length}{' '}
+          distinct fields (click to expand)
+        </summary>
+        <table className="border-collapse mt-2" data-testid="trace-details-table">
+          <thead>
+            <tr>
+              <th className="pr-4 text-left font-mono text-sm">field</th>
+              <th className="text-left font-mono text-sm">consumers</th>
+            </tr>
+          </thead>
+          <tbody>
+            {grouped.map(([field, consumers]) => (
+              <tr key={field}>
+                <td className="pr-4 font-mono text-xs align-top">{field}</td>
+                <td className="font-mono text-xs align-top">{consumers.join(', ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+    </section>
+  );
+}
+
+/** Render the USD cost line. */
+function CostSection({ output }: { output: FrameOutput }): React.ReactElement {
+  return (
+    <section className="mb-4">
+      <h2 className="text-xl font-bold">Cost</h2>
       <p>${output.debug.cost_usd.toFixed(4)} USD</p>
     </section>
   );
@@ -159,9 +271,11 @@ function TraceAndCost({ output }: { output: FrameOutput }): React.ReactElement {
 
 /**
  * Pure presentational view for a FrameOutput. Displays the run header,
- * profile table with confidence badges, narrative, directives, trace
- * summary, and USD cost. Stateless and does no fetching — the parent
- * page orchestrates API calls and passes results in as props.
+ * profile table with confidence badges, the verbatim additional_context
+ * block, the narrative prose, each scanner directive (including scanner-
+ * specific fields), a collapsible trace table grouped by field, and the
+ * USD cost. Stateless and does no fetching — the parent page orchestrates
+ * API calls and passes results in as props.
  */
 export function FrameDebugView({ output, error }: FrameDebugViewProps): React.ReactElement {
   if (error !== null) {
@@ -178,9 +292,11 @@ export function FrameDebugView({ output, error }: FrameDebugViewProps): React.Re
     <div>
       <Header output={output} />
       <ProfileTable output={output} />
+      <AdditionalContextSection output={output} />
       <NarrativeSection output={output} />
       <DirectivesPanel output={output} />
-      <TraceAndCost output={output} />
+      <TraceSection output={output} />
+      <CostSection output={output} />
     </div>
   );
 }

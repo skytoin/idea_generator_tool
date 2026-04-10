@@ -99,7 +99,9 @@ describe('FrameDebugView', () => {
 
   it('renders the profile table with stated fields', () => {
     render(<FrameDebugView output={buildOutput()} error={null} />);
-    expect(screen.getByText('skills')).toBeInTheDocument();
+    // 'skills' now appears in both the profile row and the trace details
+    // table, so assert at least one match rather than exactly one.
+    expect(screen.getAllByText('skills').length).toBeGreaterThan(0);
     expect(screen.getByText(/React/)).toBeInTheDocument();
     expect(screen.getByText(/TypeScript/)).toBeInTheDocument();
   });
@@ -118,10 +120,50 @@ describe('FrameDebugView', () => {
 
   it('renders all four scanner directive sections', () => {
     render(<FrameDebugView output={buildOutput()} error={null} />);
-    expect(screen.getByText(/tech_scout/)).toBeInTheDocument();
-    expect(screen.getByText(/pain_scanner/)).toBeInTheDocument();
-    expect(screen.getByText(/market_scanner/)).toBeInTheDocument();
-    expect(screen.getByText(/change_scanner/)).toBeInTheDocument();
+    // Scanner names also appear in the trace details table, so use
+    // getAllByText and assert each has at least one match.
+    expect(screen.getAllByText(/tech_scout/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/pain_scanner/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/market_scanner/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/change_scanner/).length).toBeGreaterThan(0);
+  });
+
+  it('renders scanner-specific fields inside each scanner section', () => {
+    render(<FrameDebugView output={buildOutput()} error={null} />);
+    // tech_scout target_sources + timeframe
+    expect(screen.getByText(/target_sources/)).toBeInTheDocument();
+    expect(screen.getByText(/timeframe/)).toBeInTheDocument();
+    expect(screen.getByText(/last 12 months/)).toBeInTheDocument();
+    // pain_scanner target_subreddits + personas
+    expect(screen.getByText(/target_subreddits/)).toBeInTheDocument();
+    expect(screen.getByText(/personas/)).toBeInTheDocument();
+    // market_scanner competitor_domains + yc_batches_to_scan
+    expect(screen.getByText(/competitor_domains/)).toBeInTheDocument();
+    expect(screen.getByText(/yc_batches_to_scan/)).toBeInTheDocument();
+    // change_scanner regulatory_areas + geographic
+    expect(screen.getByText(/regulatory_areas/)).toBeInTheDocument();
+    expect(screen.getByText(/geographic/)).toBeInTheDocument();
+  });
+
+  it('renders the verbatim additional_context_raw block when non-empty', () => {
+    const output = buildOutput();
+    output.profile.additional_context_raw =
+      'I run a Shopify theme shop with 400 customers.';
+    render(<FrameDebugView output={output} error={null} />);
+    expect(screen.getByTestId('additional-context-raw')).toHaveTextContent(
+      /Shopify theme shop/,
+    );
+  });
+
+  it('shows an empty placeholder when additional_context_raw is empty', () => {
+    render(<FrameDebugView output={buildOutput()} error={null} />);
+    expect(screen.queryByTestId('additional-context-raw')).toBeNull();
+    expect(screen.getByText(/no free-text note submitted/i)).toBeInTheDocument();
+  });
+
+  it('renders the trace details table grouping consumers by field', () => {
+    render(<FrameDebugView output={buildOutput()} error={null} />);
+    expect(screen.getByTestId('trace-details-table')).toBeInTheDocument();
   });
 
   it('renders the cost as USD', () => {
@@ -129,7 +171,7 @@ describe('FrameDebugView', () => {
     expect(screen.getByText(/\$0\.0123/)).toBeInTheDocument();
   });
 
-  it('renders the trace entry count', () => {
+  it('renders the trace entry count in the summary', () => {
     render(<FrameDebugView output={buildOutput()} error={null} />);
     expect(screen.getByText(/3 field->consumer pairs/)).toBeInTheDocument();
   });

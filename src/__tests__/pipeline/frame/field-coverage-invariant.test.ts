@@ -317,3 +317,59 @@ describe('§F — refine mode anchor preservation', () => {
     }
   });
 });
+
+describe('§G — additional_context_raw propagation invariant', () => {
+  it('carol verbatim additional_context appears in the narrative prompt', async () => {
+    const ext = await extractProfile({ ...carol, additional_context: '' });
+    if (!ext.ok) throw new Error('extract failed');
+    const assumed = applyAssumptions(ext.value, carol.additional_context, 'carol-hash');
+    if (!assumed.ok) throw new Error('assumptions failed');
+    const { user } = buildNarrativePrompt(
+      assumed.value,
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    // Distinctive phrases that exist ONLY in Carol's additional_context —
+    // not in any structured field — so if they appear in the prompt, the
+    // raw context propagated.
+    expect(user).toContain('Seeing Like a State');
+    expect(user).toContain('cabin in Vermont');
+    expect(user).toContain('<founder_notes>');
+  });
+
+  it('carol verbatim additional_context appears in the directives prompt', async () => {
+    const ext = await extractProfile({ ...carol, additional_context: '' });
+    if (!ext.ok) throw new Error('extract failed');
+    const assumed = applyAssumptions(ext.value, carol.additional_context, 'carol-hash');
+    if (!assumed.ok) throw new Error('assumptions failed');
+    const { user } = buildDirectivesPrompt(
+      assumed.value,
+      'narrative prose',
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    expect(user).toContain('Seeing Like a State');
+    expect(user).toContain('cabin in Vermont');
+    expect(user).toContain('<founder_notes>');
+  });
+
+  it('empty additional_context produces no founder_notes block in either prompt', async () => {
+    const ext = await extractProfile({ ...carol, additional_context: '' });
+    if (!ext.ok) throw new Error('extract failed');
+    const assumed = applyAssumptions(ext.value, '', 'carol-empty-hash');
+    if (!assumed.ok) throw new Error('assumptions failed');
+    const narrativePrompt = buildNarrativePrompt(
+      assumed.value,
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    const directivesPrompt = buildDirectivesPrompt(
+      assumed.value,
+      'narrative prose',
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    expect(narrativePrompt.user).not.toContain('<founder_notes>');
+    expect(directivesPrompt.user).not.toContain('<founder_notes>');
+  });
+});

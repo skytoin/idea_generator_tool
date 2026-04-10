@@ -132,6 +132,36 @@ describe('buildNarrativePrompt — field coverage for narrative consumer', () =>
     expect(system.startsWith('[[SCENARIO:narrative-demo]]')).toBe(true);
   });
 
+  it('injects verbatim additional_context_raw into the user prompt when present', async () => {
+    const ext = await extractProfile({ ...alice, additional_context: '' });
+    if (!ext.ok) throw new Error('extract failed');
+    const assumed = applyAssumptions(
+      ext.value,
+      'I am obsessed with fraud detection UX and dream of running this from a Vermont cabin.',
+      'notes-hash',
+    );
+    if (!assumed.ok) throw new Error('assumptions failed');
+    const { user } = buildNarrativePrompt(assumed.value, 'explore', null);
+    expect(user).toContain('<founder_notes>');
+    expect(user).toContain('</founder_notes>');
+    expect(user).toContain('obsessed with fraud detection UX');
+    expect(user).toContain('Vermont cabin');
+  });
+
+  it('omits the founder_notes block entirely when additional_context_raw is empty', async () => {
+    const profile = await buildAliceProfile();
+    expect(profile.additional_context_raw).toBe('');
+    const { user } = buildNarrativePrompt(profile, 'explore', null);
+    expect(user).not.toContain('<founder_notes>');
+  });
+
+  it('system prompt warns that founder_notes content is untrusted', async () => {
+    const profile = await buildAliceProfile();
+    const { system } = buildNarrativePrompt(profile, 'explore', null);
+    expect(system).toContain('<founder_notes>');
+    expect(system.toLowerCase()).toContain('untrusted');
+  });
+
   it('required_in_prompt fields appear in the prompt', async () => {
     const profile = await buildCarolProfile();
     const { user, system } = buildNarrativePrompt(

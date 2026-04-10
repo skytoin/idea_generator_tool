@@ -179,6 +179,43 @@ describe('buildDirectivesPrompt — trace and prompt content', () => {
     const names = traces.map((t) => t.consumerName).sort();
     expect(names).toEqual(SCANNER_CONSUMERS.slice().sort());
   });
+
+  it('injects verbatim additional_context_raw into the user prompt when present', async () => {
+    const { extractProfile } = await import('../../../pipeline/frame/extract-profile');
+    const { applyAssumptions } = await import('../../../pipeline/frame/apply-assumptions');
+    const ext = await extractProfile({ ...bob, additional_context: '' });
+    if (!ext.ok) throw new Error('extract failed');
+    const assumed = applyAssumptions(
+      ext.value,
+      'Obsessed with Shopify Liquid and love helping theme shops.',
+      'bob-hash',
+    );
+    if (!assumed.ok) throw new Error('assumptions failed');
+    const { user } = buildDirectivesPrompt(assumed.value, 'prose', 'explore', null);
+    expect(user).toContain('<founder_notes>');
+    expect(user).toContain('</founder_notes>');
+    expect(user).toContain('Obsessed with Shopify Liquid');
+    expect(user).toContain('love helping theme shops');
+  });
+
+  it('omits founder_notes block when additional_context_raw is empty', async () => {
+    const profile = await buildProfile({ ...bob, additional_context: '' }, 'bob-hash');
+    expect(profile.additional_context_raw).toBe('');
+    const { user } = buildDirectivesPrompt(profile, 'prose', 'explore', null);
+    expect(user).not.toContain('<founder_notes>');
+  });
+
+  it('system prompt warns that founder_notes content is untrusted', async () => {
+    const profile = await buildProfile(carol, 'carol-hash');
+    const { system } = buildDirectivesPrompt(
+      profile,
+      'prose',
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    expect(system).toContain('<founder_notes>');
+    expect(system.toLowerCase()).toContain('untrusted');
+  });
 });
 
 describe('generateDirectives — end to end', () => {

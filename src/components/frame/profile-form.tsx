@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactElement } from 'react';
 import type { FrameInput } from '../../lib/types/frame-input';
+import type { FrameOutput } from '../../lib/types/frame-output';
 import { saveDraft, loadDraft } from '../../lib/frame/client-state';
 import { QUESTIONS, type Question, type QuestionTarget } from '../../pipeline/frame/questions';
 import { ModeSelector, type Mode } from './mode-selector';
@@ -10,14 +11,15 @@ import { AdditionalContext } from './additional-context';
 import { ProfileProgress } from './profile-progress';
 import { AssumptionPreview } from './assumption-preview';
 import { ChatAssistDrawer } from './chat-assist-drawer';
+import { FrameDebugView } from '../debug/frame-debug-view';
 
 type FormState = Partial<FrameInput>;
 
 type SubmitState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'success'; profileHash: string }
-  | { kind: 'error'; message: string };
+  | { kind: 'success'; output: FrameOutput }
+  | { kind: 'error'; message: string; details?: string };
 
 const REQUIRED_IDS = new Set(['Q1', 'Q2', 'Q3', 'Q4']);
 const RECOMMENDED_IDS = new Set(['Q20', 'Q5', 'Q6', 'Q7']);
@@ -145,6 +147,17 @@ function OptionalSection({
   );
 }
 
+/** Read an error detail string out of a non-ok response body, best effort. */
+async function readErrorDetails(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { error?: string; message?: string };
+    const first = body.error ?? body.message;
+    return first ? `HTTP ${response.status} — ${first}` : `HTTP ${response.status}`;
+  } catch {
+    return `HTTP ${response.status}`;
+  }
+}
+
 /** POST current form state to /api/frame/extract and return the new SubmitState. */
 async function submitForm(input: FormState): Promise<SubmitState> {
   try {
@@ -153,30 +166,39 @@ async function submitForm(input: FormState): Promise<SubmitState> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
-    if (!response.ok) return { kind: 'error', message: 'Something went wrong' };
-    const data = (await response.json()) as {
-      profile: { profile_hash: string };
+    if (!response.ok) {
+      const details = await readErrorDetails(response);
+      return { kind: 'error', message: 'Something went wrong', details };
+    }
+    const data = (await response.json()) as FrameOutput;
+    return { kind: 'success', output: data };
+  } catch (e) {
+    return {
+      kind: 'error',
+      message: 'Something went wrong',
+      details: e instanceof Error ? e.message : undefined,
     };
-    return { kind: 'success', profileHash: data.profile.profile_hash };
-  } catch {
-    return { kind: 'error', message: 'Something went wrong' };
   }
 }
 
-/** Render the submit status banner (success or error). */
+/**
+ * Render the submit status banner. On success, shows a short confirmation
+ * header and then renders the full FrameDebugView inline so the founder can
+ * inspect the narrative, directives, trace, and cost without navigating away.
+ */
 function SubmitBanner({ state }: { state: SubmitState }): ReactElement | null {
   if (state.kind === 'success') {
     return (
-      <div className="bg-green-100 border border-green-400 text-green-900 rounded p-3 mb-2">
-        <p>
-          Success! profile_hash: <code>{state.profileHash}</code>
-        </p>
-        <a
-          href={`/debug/frame?hash=${state.profileHash}`}
-          className="text-blue-700 underline"
+      <div className="mt-4">
+        <div
+          className="bg-green-100 border border-green-400 text-green-900 rounded p-3 mb-3"
+          data-testid="submit-success-banner"
         >
-          View debug output
-        </a>
+          <p>
+            Success! profile_hash: <code>{state.output.profile.profile_hash}</code>
+          </p>
+        </div>
+        <FrameDebugView output={state.output} error={null} />
       </div>
     );
   }
@@ -186,7 +208,8 @@ function SubmitBanner({ state }: { state: SubmitState }): ReactElement | null {
         role="alert"
         className="bg-red-100 border border-red-400 text-red-900 rounded p-3 mb-2"
       >
-        {state.message}
+        <p className="font-medium">{state.message}</p>
+        {state.details && <p className="text-sm mt-1 opacity-80">{state.details}</p>}
       </div>
     );
   }

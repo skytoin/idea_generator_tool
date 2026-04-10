@@ -124,17 +124,81 @@ describe('ProfileForm', () => {
   });
 
   it('submits and shows success message when all required filled and fetch resolves', async () => {
+    const stated = <T,>(value: T) => ({ value, source: 'stated' as const });
+    const assumed = <T,>(value: T) => ({ value, source: 'assumed' as const });
+    const fullOutput = {
+      mode: 'explore' as const,
+      existing_idea: null,
+      profile: {
+        skills: stated(['React']),
+        time_per_week: stated('10' as const),
+        money_available: stated('lt_500' as const),
+        ambition: stated('side_project' as const),
+        domain: assumed([] as Array<{ area: string; years: number | null }>),
+        insider_knowledge: assumed(null),
+        anti_targets: assumed([] as string[]),
+        network: assumed(null),
+        audience: assumed(null),
+        proprietary_access: assumed(null),
+        rare_combinations: assumed(null),
+        recurring_frustration: assumed(null),
+        four_week_mvp: assumed(null),
+        previous_attempts: assumed(null),
+        customer_affinity: assumed(null),
+        time_to_revenue: assumed('no_preference' as const),
+        customer_type_preference: assumed('no_preference' as const),
+        trigger: assumed(null),
+        legal_constraints: assumed(null),
+        divergence_level: assumed('balanced' as const),
+        additional_context_raw: '',
+        schema_version: 1 as const,
+        profile_hash: 'abcdef1234567890',
+      },
+      narrative: {
+        prose: 'A short prose summary of the founder to satisfy the 50-char minimum.',
+        word_count: 13,
+        generated_at: '2026-04-08T00:00:00.000Z',
+      },
+      directives: {
+        tech_scout: {
+          keywords: [],
+          exclude: [],
+          notes: '',
+          target_sources: [],
+          timeframe: '',
+        },
+        pain_scanner: {
+          keywords: [],
+          exclude: [],
+          notes: '',
+          target_subreddits: [],
+          personas: [],
+        },
+        market_scanner: {
+          keywords: [],
+          exclude: [],
+          notes: '',
+          competitor_domains: [],
+          yc_batches_to_scan: [],
+        },
+        change_scanner: {
+          keywords: [],
+          exclude: [],
+          notes: '',
+          regulatory_areas: [],
+          geographic: [],
+        },
+      },
+      debug: {
+        trace: [],
+        cost_usd: 0.01,
+        generated_at: '2026-04-08T00:00:00.000Z',
+      },
+    };
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({
-        mode: 'explore',
-        existing_idea: null,
-        profile: { profile_hash: 'abcdef1234567890' },
-        narrative: { prose: 'p', word_count: 1, generated_at: '2026-04-08T00:00:00.000Z' },
-        directives: {},
-        debug: { trace: [], cost_usd: 0, generated_at: '2026-04-08T00:00:00.000Z' },
-      }),
+      json: async () => fullOutput,
     });
     vi.stubGlobal('fetch', mockFetch);
     render(<ProfileForm />);

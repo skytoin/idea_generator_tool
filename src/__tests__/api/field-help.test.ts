@@ -25,8 +25,13 @@ describe('POST /api/frame/field-help', () => {
     __resetFieldHelpForTest();
   });
 
-  it('returns 200 with the mock message on happy path', async () => {
-    setOpenAIResponse('field-help-ok', { content: 'Try listing Python data pipelines.' });
+  it('returns 200 with message and typed suggested_value on happy path', async () => {
+    setOpenAIResponse('field-help-ok', {
+      content: JSON.stringify({
+        message: 'Try listing Python data pipelines and Django APIs.',
+        suggested_value: ['Python data pipelines', 'Django APIs'],
+      }),
+    });
     const req = buildRequest(
       {
         questionId: 'Q1',
@@ -40,6 +45,27 @@ describe('POST /api/frame/field-help', () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.message).toContain('Python data pipelines');
+    expect(data.suggested_value).toEqual(['Python data pipelines', 'Django APIs']);
+  });
+
+  it('allows suggested_value to be null when the question is conceptual', async () => {
+    setOpenAIResponse('field-help-null', {
+      content: JSON.stringify({
+        message: 'This field is where you list skills you can apply yourself.',
+        suggested_value: null,
+      }),
+    });
+    const req = buildRequest({
+      questionId: 'Q1',
+      userMessage: 'What does this field mean?',
+      currentInput: {},
+      sessionId: 'sess-null',
+      scenario: 'field-help-null',
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.suggested_value).toBeNull();
   });
 
   it('returns 400 for an unknown questionId', async () => {
@@ -81,7 +107,9 @@ describe('POST /api/frame/field-help', () => {
   });
 
   it('returns 429 on the 11th request from the same session', async () => {
-    setOpenAIResponse('rl-ok', { content: 'ok' });
+    setOpenAIResponse('rl-ok', {
+      content: JSON.stringify({ message: 'ok', suggested_value: null }),
+    });
     const body = {
       questionId: 'Q1',
       userMessage: 'help',

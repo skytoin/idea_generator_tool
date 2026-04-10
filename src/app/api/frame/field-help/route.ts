@@ -1,8 +1,11 @@
 import { z } from 'zod';
-import { generateText } from 'ai';
+import { generateObject } from 'ai';
 import { models } from '../../../../lib/ai/models';
-import { getQuestionById } from '../../../../pipeline/frame/questions';
-import { buildFieldHelpPrompt } from '../../../../pipeline/prompts/frame-field-help';
+import { getQuestionById, type Question } from '../../../../pipeline/frame/questions';
+import {
+  buildFieldHelpPrompt,
+  buildFieldHelpResponseSchema,
+} from '../../../../pipeline/prompts/frame-field-help';
 import { RateLimiter } from '../../../../lib/utils/rate-limit';
 
 /**
@@ -59,17 +62,31 @@ function checkLimit(sessionId: string): Response | undefined {
   );
 }
 
-/** Call the LLM with the field-help prompt pair, surfacing errors as 500. */
-async function callLLM(system: string, user: string): Promise<Response> {
+/**
+ * Call the LLM with structured output constrained by the per-question
+ * response schema. The schema's suggested_value shape matches the field's
+ * inputType so the client can apply it directly to the form. Surfaces any
+ * SDK error as a 500 llm_failed response.
+ */
+async function callLLM(
+  question: Question,
+  system: string,
+  user: string,
+): Promise<Response> {
   try {
-    const { text } = await generateText({
+    const schema = buildFieldHelpResponseSchema(question);
+    const { object } = await generateObject({
       model: models.frame,
+      schema,
       system,
       prompt: user,
     });
-    return Response.json({ message: text }, { status: 200 });
+    return Response.json(object, { status: 200 });
   } catch (e) {
-    console.error('[frame/field-help] llm_failed', e instanceof Error ? e.message : String(e));
+    console.error(
+      '[frame/field-help] llm_failed',
+      e instanceof Error ? e.message : String(e),
+    );
     return Response.json({ error: 'llm_failed' }, { status: 500 });
   }
 }
@@ -77,7 +94,8 @@ async function callLLM(system: string, user: string): Promise<Response> {
 /**
  * POST /api/frame/field-help — chat assist for filling a single Frame field.
  * Expects { questionId, userMessage, currentInput, sessionId }; returns
- * { message } on success, a typed error object on failure, or 429 when
+ * { message, suggested_value } on success (where suggested_value is typed
+ * per the field's inputType), a typed error object on failure, or 429 when
  * the sessionId has used its quota within the current window.
  */
 export async function POST(request: Request): Promise<Response> {
@@ -95,7 +113,7 @@ export async function POST(request: Request): Promise<Response> {
   const limited = checkLimit(sessionId);
   if (limited) return limited;
   const { system, user } = buildFieldHelpPrompt(question, userMessage, currentInput, scenario);
-  return callLLM(system, user);
+  return callLLM(question, system, user);
 }
 
 /**

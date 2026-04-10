@@ -81,7 +81,7 @@ describe('ChatAssistDrawer', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ message: 'Try React + Zod' }),
+      json: async () => ({ message: 'Try React + Zod', suggested_value: 'React + Zod' }),
     });
     vi.stubGlobal('fetch', mockFetch);
     render(
@@ -112,7 +112,10 @@ describe('ChatAssistDrawer', () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ message: 'Try Next.js + Tailwind' }),
+      json: async () => ({
+        message: 'Try Next.js + Tailwind',
+        suggested_value: 'Next.js + Tailwind',
+      }),
     });
     vi.stubGlobal('fetch', mockFetch);
     render(
@@ -132,11 +135,14 @@ describe('ChatAssistDrawer', () => {
     );
   });
 
-  it('clicking "Use this answer" fires onApply and onClose', async () => {
+  it('clicking "Use this answer" fires onApply with suggested_value and onClose', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ message: 'Final answer' }),
+      json: async () => ({
+        message: 'Go with this',
+        suggested_value: 'the structured value',
+      }),
     });
     vi.stubGlobal('fetch', mockFetch);
     const onApply = vi.fn();
@@ -153,10 +159,40 @@ describe('ChatAssistDrawer', () => {
     );
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'ask' } });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
-    await waitFor(() => expect(screen.getByText(/Final answer/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Go with this/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /use this answer/i }));
-    expect(onApply).toHaveBeenCalledWith('Final answer');
+    expect(onApply).toHaveBeenCalledWith('the structured value');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does not render "Use this answer" when suggested_value is null', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        message: 'This field is where you describe X.',
+        suggested_value: null,
+      }),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+    render(
+      <ChatAssistDrawer
+        open={true}
+        question={buildQuestion()}
+        currentInput={{}}
+        sessionId="s"
+        onClose={vi.fn()}
+        onApply={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'what does this mean?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/where you describe X/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /use this answer/i })).toBeNull();
   });
 
   it('Escape key fires onClose', () => {
@@ -266,7 +302,7 @@ describe('ChatAssistDrawer', () => {
     deferred.resolve?.({
       ok: true,
       status: 200,
-      json: async () => ({ message: 'done' }),
+      json: async () => ({ message: 'done', suggested_value: 'done' }),
     });
     await waitFor(() => expect(screen.getByText(/done/)).toBeInTheDocument());
   });

@@ -12,7 +12,13 @@ export type ChatAssistDrawerProps = {
   onApply: (value: unknown) => void;
 };
 
-type Message = { role: 'user' | 'assistant'; content: string };
+type UserMessage = { role: 'user'; content: string };
+type AssistantMessage = {
+  role: 'assistant';
+  content: string;
+  suggestedValue: unknown | null;
+};
+type Message = UserMessage | AssistantMessage;
 
 type DrawerState = {
   messages: Message[];
@@ -29,16 +35,20 @@ const INITIAL_STATE: DrawerState = {
 };
 
 /**
- * POST the user's message to /api/frame/field-help and return the
- * assistant reply or an error category. Separated from the component
- * so state updates stay linear inside the effect.
+ * POST the user's message to /api/frame/field-help and return the assistant
+ * reply or an error category. The server returns a structured payload with
+ * both a human-readable message and a typed suggested_value that matches
+ * the field's input type.
  */
 async function requestFieldHelp(
   question: Question,
   userMessage: string,
   currentInput: Record<string, unknown>,
   sessionId: string,
-): Promise<{ ok: true; message: string } | { ok: false; kind: 'rate_limited' | 'server_error' }> {
+): Promise<
+  | { ok: true; message: string; suggestedValue: unknown | null }
+  | { ok: false; kind: 'rate_limited' | 'server_error' }
+> {
   try {
     const response = await fetch('/api/frame/field-help', {
       method: 'POST',
@@ -52,14 +62,21 @@ async function requestFieldHelp(
     });
     if (response.status === 429) return { ok: false, kind: 'rate_limited' };
     if (!response.ok) return { ok: false, kind: 'server_error' };
-    const data = (await response.json()) as { message: string };
-    return { ok: true, message: data.message };
+    const data = (await response.json()) as {
+      message: string;
+      suggested_value?: unknown;
+    };
+    return {
+      ok: true,
+      message: data.message,
+      suggestedValue: data.suggested_value ?? null,
+    };
   } catch {
     return { ok: false, kind: 'server_error' };
   }
 }
 
-/** Attach a window Escape listener that calls onClose; clean up on unmount. */
+/** Attach a document Escape listener that calls onClose; clean up on unmount. */
 function useEscapeKey(enabled: boolean, onClose: () => void): void {
   useEffect(() => {
     if (!enabled) return undefined;
@@ -71,24 +88,34 @@ function useEscapeKey(enabled: boolean, onClose: () => void): void {
   }, [enabled, onClose]);
 }
 
-/** Render a single chat message bubble with an optional apply button. */
+/**
+ * Render a single chat message bubble. For assistant messages with a
+ * non-null suggestedValue, also renders the "Use this answer" apply button.
+ */
 function MessageBubble({
   message,
   onApply,
 }: {
   message: Message;
-  onApply?: (content: string) => void;
+  onApply?: (value: unknown) => void;
 }): ReactElement {
   const align = message.role === 'user' ? 'text-right' : 'text-left';
+  const showApply =
+    message.role === 'assistant' &&
+    message.suggestedValue !== null &&
+    message.suggestedValue !== undefined &&
+    onApply !== undefined;
   return (
     <div className={`mb-2 ${align}`}>
       <div className="inline-block bg-gray-100 rounded px-2 py-1 max-w-[80%]">
         <p className="whitespace-pre-wrap">{message.content}</p>
-        {message.role === 'assistant' && onApply && (
+        {showApply && (
           <button
             type="button"
             className="text-xs text-blue-700 mt-1"
-            onClick={() => onApply(message.content)}
+            onClick={() =>
+              onApply?.((message as AssistantMessage).suggestedValue)
+            }
           >
             Use this answer
           </button>
@@ -131,7 +158,7 @@ export function ChatAssistDrawer({
 
   const handleSend = async (): Promise<void> => {
     if (state.input.trim().length === 0) return;
-    const userMsg: Message = { role: 'user', content: state.input.trim() };
+    const userMsg: UserMessage = { role: 'user', content: state.input.trim() };
     setState((s) => ({
       ...s,
       messages: [...s.messages, userMsg],
@@ -142,17 +169,22 @@ export function ChatAssistDrawer({
     const result = await requestFieldHelp(question, userMsg.content, currentInput, sessionId);
     setState((s) => {
       if (!result.ok) return { ...s, loading: false, error: result.kind };
+      const assistantMsg: AssistantMessage = {
+        role: 'assistant',
+        content: result.message,
+        suggestedValue: result.suggestedValue,
+      };
       return {
         ...s,
         loading: false,
         error: null,
-        messages: [...s.messages, { role: 'assistant', content: result.message }],
+        messages: [...s.messages, assistantMsg],
       };
     });
   };
 
-  const handleApply = (content: string): void => {
-    onApply(content);
+  const handleApply = (value: unknown): void => {
+    onApply(value);
     onClose();
   };
 

@@ -199,13 +199,15 @@ type DrawerState = {
 };
 
 /**
- * Build a stable sessionId the first time the form mounts. Uses a lazy
- * initializer in useState so Math.random is only called once, and only
- * on the client. Starts empty during SSR, then hydrates on mount.
+ * Build a stable sessionId the first time the form mounts. Uses a useState
+ * lazy initializer with a `typeof window` guard so the SSR pass returns an
+ * empty string (no Math.random on the server) and the client initial render
+ * generates a stable id. This avoids both the React 19 impure-render warning
+ * and the server/client state divergence that can disrupt hydration.
  */
 function useSessionId(): string {
   const [sessionId] = useState<string>(() => {
-    if (typeof globalThis === 'undefined') return '';
+    if (typeof window === 'undefined') return '';
     return `session-${Math.random().toString(36).slice(2, 10)}`;
   });
   return sessionId;

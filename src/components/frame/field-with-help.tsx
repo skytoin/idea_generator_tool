@@ -377,7 +377,7 @@ export function FieldWithHelp({
         <label className="font-medium">{question.label}</label>
         <button
           type="button"
-          className="text-sm text-blue-700"
+          className="text-sm text-blue-700 border border-blue-300 rounded px-2 py-0.5 hover:bg-blue-50 cursor-pointer"
           onClick={() => onRequestHelp(question.id)}
         >
           💬 Help

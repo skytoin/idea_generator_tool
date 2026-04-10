@@ -44,7 +44,7 @@ describe('FIELD_COVERAGE', () => {
     }
   });
 
-  it('required_in_prompt fields are exactly the expected 7', () => {
+  it('required_in_prompt fields are exactly the expected 8', () => {
     const required = Object.entries(FIELD_COVERAGE)
       .filter(([, e]) => e.required_in_prompt)
       .map(([k]) => k);
@@ -57,6 +57,7 @@ describe('FIELD_COVERAGE', () => {
         'domain',
         'insider_knowledge',
         'anti_targets',
+        'divergence_level',
       ].sort(),
     );
   });

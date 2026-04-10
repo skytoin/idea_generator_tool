@@ -92,7 +92,13 @@ export function buildDirectivesPrompt(
   scenario?: string,
 ): { system: string; user: string; traces: PromptTrace[] } {
   const marker = scenario ? `[[SCENARIO:${scenario}]]\n` : '';
-  const system = `${marker}You are a scanner-directive planner. Given a founder profile and a prose narrative, produce one ScannerDirectives object with per-scanner hints for: tech_scout, pain_scanner, market_scanner, change_scanner. Each hint contains keywords, exclude, notes, plus scanner-specific fields. Return ONLY the structured object.`;
+  const system = `${marker}You are a scanner-directive planner. Given a founder profile and a prose narrative, produce one ScannerDirectives object with per-scanner hints for: tech_scout, pain_scanner, market_scanner, change_scanner. Each hint contains keywords, exclude, notes, plus scanner-specific fields. Return ONLY the structured object.
+
+Adapt keyword breadth to the founder's divergence_level:
+- strict: keywords stay within the founder's stated skills and domain. No adjacent industries.
+- balanced: mostly profile-adjacent keywords plus 1-2 tangential ones.
+- adventurous: include adjacent-but-unfamiliar domains the founder could plausibly enter.
+- wild: deliberately include cross-domain and contrarian keywords that the founder would not have thought of from their profile alone.`;
   const traces: PromptTrace[] = SCANNER_CONSUMERS.map((c) => new PromptTrace(c));
   const sections = traces
     .map((t) => renderScannerSection(profile, t, t.consumerName))

@@ -75,4 +75,14 @@ export const FIELD_COVERAGE: Record<FounderProfileField, CoverageEntry> = {
     consumers: ['narrative', 'change_scanner'],
     required_in_prompt: false,
   },
+  divergence_level: {
+    consumers: [
+      'narrative',
+      'tech_scout',
+      'pain_scanner',
+      'market_scanner',
+      'change_scanner',
+    ],
+    required_in_prompt: true,
+  },
 };

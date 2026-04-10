@@ -20,7 +20,7 @@ type SubmitState =
   | { kind: 'error'; message: string };
 
 const REQUIRED_IDS = new Set(['Q1', 'Q2', 'Q3', 'Q4']);
-const RECOMMENDED_IDS = new Set(['Q5', 'Q6', 'Q7']);
+const RECOMMENDED_IDS = new Set(['Q20', 'Q5', 'Q6', 'Q7']);
 const OPTIONAL_IDS = new Set([
   'Q8',
   'Q9',

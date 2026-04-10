@@ -28,6 +28,7 @@ function buildValidProfile(): FounderProfile {
     customer_type_preference: stated('b2b'),
     trigger: stated('Got laid off'),
     legal_constraints: stated('None'),
+    divergence_level: stated('balanced'),
     additional_context_raw: '',
     schema_version: 1,
     profile_hash: 'abc',
@@ -35,7 +36,7 @@ function buildValidProfile(): FounderProfile {
 }
 
 describe('FOUNDER_PROFILE_SCHEMA', () => {
-  it('parses a minimum valid profile with all 19 fields', () => {
+  it('parses a minimum valid profile with all 20 fields', () => {
     const result = FOUNDER_PROFILE_SCHEMA.safeParse(buildValidProfile());
     expect(result.success).toBe(true);
   });

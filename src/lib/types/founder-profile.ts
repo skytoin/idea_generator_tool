@@ -3,6 +3,15 @@ import { z } from 'zod';
 export const CONFIDENCE = z.enum(['stated', 'inferred', 'assumed']);
 export type Confidence = z.infer<typeof CONFIDENCE>;
 
+/**
+ * Controls how closely the downstream pipeline (generators, ranker) must
+ * adhere to the founder's stated profile. `strict` = tightly constrained;
+ * `wild` = allow surprising, profile-divergent ideas. See `questions.ts`
+ * Q20 for the user-facing copy.
+ */
+export const DIVERGENCE_LEVEL = z.enum(['strict', 'balanced', 'adventurous', 'wild']);
+export type DivergenceLevel = z.infer<typeof DIVERGENCE_LEVEL>;
+
 /** Every profile field is { value, source } so confidence travels with data. */
 const tagged = <T extends z.ZodTypeAny>(inner: T) =>
   z.object({ value: inner, source: CONFIDENCE });
@@ -43,6 +52,9 @@ export const FOUNDER_PROFILE_SCHEMA = z.object({
   customer_type_preference: tagged(z.enum(['b2b', 'b2c', 'both', 'no_preference'])),
   trigger: tagged(z.string().nullable()),
   legal_constraints: tagged(z.string().nullable()),
+
+  // Strategy knob: how closely should generated ideas match the profile?
+  divergence_level: tagged(DIVERGENCE_LEVEL),
 
   // Raw preservation
   additional_context_raw: z.string().max(5000),

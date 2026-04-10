@@ -111,7 +111,33 @@ export const QUESTIONS: readonly Question[] = [
     ],
   },
 
-  // Recommended Q5-Q7
+  // Recommended Q20, Q5-Q7
+  {
+    id: 'Q20',
+    label: 'How strictly should the idea generator match your profile?',
+    hint: 'Controls how far downstream generators are allowed to stray from what you stated above. Default is Balanced — a mix of fit and stretch.',
+    inputType: 'radio',
+    profileField: 'divergence_level',
+    required: false,
+    options: [
+      {
+        value: 'strict',
+        label: 'Strict — only ideas that fit my skills, time, and budget tightly',
+      },
+      {
+        value: 'balanced',
+        label: 'Balanced — mostly fit me, with some stretch (default)',
+      },
+      {
+        value: 'adventurous',
+        label: "Adventurous — stretch me, I'll learn new things",
+      },
+      {
+        value: 'wild',
+        label: "Wild — surprise me with ideas outside my profile",
+      },
+    ],
+  },
   {
     id: 'Q5',
     label: 'What industries, fields, or areas have you worked in — and roughly how long in each?',

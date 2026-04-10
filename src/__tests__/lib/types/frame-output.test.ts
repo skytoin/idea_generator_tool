@@ -24,6 +24,7 @@ function buildValidProfile(): FounderProfile {
     customer_type_preference: stated('b2b'),
     trigger: stated('Layoff'),
     legal_constraints: stated('None'),
+    divergence_level: stated('balanced'),
     additional_context_raw: '',
     schema_version: 1,
     profile_hash: 'abc',

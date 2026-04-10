@@ -41,6 +41,7 @@ export const ASSUMED_DEFAULTS = {
   customer_type_preference: { value: 'no_preference', source: 'assumed' },
   trigger: { value: null, source: 'assumed' },
   legal_constraints: { value: null, source: 'assumed' },
+  divergence_level: { value: 'balanced', source: 'assumed' },
 } as const;
 
 type OptionalField = keyof typeof ASSUMED_DEFAULTS;
@@ -61,6 +62,7 @@ const OPTIONAL_FIELDS: OptionalField[] = [
   'customer_type_preference',
   'trigger',
   'legal_constraints',
+  'divergence_level',
 ];
 
 /**

@@ -31,6 +31,7 @@ function buildOutput(): FrameOutput {
       customer_type_preference: { value: 'no_preference', source: 'assumed' },
       trigger: { value: null, source: 'assumed' },
       legal_constraints: { value: null, source: 'assumed' },
+      divergence_level: { value: 'balanced', source: 'assumed' },
       additional_context_raw: '',
       schema_version: 1,
       profile_hash: 'abcdef0123456789',

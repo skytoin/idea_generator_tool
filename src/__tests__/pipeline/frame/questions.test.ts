@@ -13,8 +13,8 @@ const VALID_PROFILE_FIELDS = new Set(
 const SPECIAL_TARGETS = new Set(['mode', 'existing_idea', 'additional_context']);
 
 describe('QUESTIONS registry', () => {
-  it('contains exactly 22 entries', () => {
-    expect(QUESTIONS.length).toBe(22);
+  it('contains exactly 23 entries', () => {
+    expect(QUESTIONS.length).toBe(23);
   });
 
   it('has exactly 6 required questions: M1, M1b, Q1-Q4', () => {
@@ -27,6 +27,15 @@ describe('QUESTIONS registry', () => {
     for (const q of QUESTIONS) {
       expect(q.hint.length, `${q.id} hint too short`).toBeGreaterThan(10);
     }
+  });
+
+  it('Q20 (divergence_level) is a radio with strict/balanced/adventurous/wild options', () => {
+    const q = getQuestionById('Q20');
+    expect(q).toBeDefined();
+    expect(q?.inputType).toBe('radio');
+    expect(q?.profileField).toBe('divergence_level');
+    const values = (q?.options ?? []).map((o) => o.value).sort();
+    expect(values).toEqual(['adventurous', 'balanced', 'strict', 'wild']);
   });
 
   it('every select/radio question has options with >= 2 entries and non-empty labels', () => {

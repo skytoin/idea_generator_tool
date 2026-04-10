@@ -38,6 +38,9 @@ export const FRAME_INPUT_SCHEMA = z
     customer_type_preference: z.enum(['b2b', 'b2c', 'both', 'no_preference']).optional(),
     trigger: z.string().optional(),
     legal_constraints: z.string().optional(),
+    divergence_level: z
+      .enum(['strict', 'balanced', 'adventurous', 'wild'])
+      .optional(),
     additional_context: z.string().max(5000).default(''),
   })
   .refine(

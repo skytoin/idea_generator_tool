@@ -69,6 +69,7 @@ function renderProfileBullets(profile: FounderProfile, trace: PromptTrace): stri
     line(trace, profile, 'customer_type_preference'),
     line(trace, profile, 'trigger'),
     line(trace, profile, 'legal_constraints'),
+    line(trace, profile, 'divergence_level'),
   ].join('\n');
 }
 

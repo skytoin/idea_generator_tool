@@ -48,6 +48,7 @@ const OPTIONAL_FORM_FIELDS: OptionalFormField[] = [
   'customer_type_preference',
   'trigger',
   'legal_constraints',
+  'divergence_level',
 ];
 
 /**

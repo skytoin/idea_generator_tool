@@ -79,6 +79,24 @@ function buildValidFrameOutput() {
   };
 }
 
+function buildMinValidScannerReport() {
+  return {
+    scanner: 'tech_scout',
+    status: 'ok' as const,
+    signals: [],
+    source_reports: [],
+    expansion_plan: null,
+    total_raw_items: 0,
+    signals_after_dedupe: 0,
+    signals_after_exclude: 0,
+    cost_usd: 0,
+    elapsed_ms: 0,
+    generated_at: '2026-04-08T12:00:00.000Z',
+    errors: [],
+    warnings: [],
+  };
+}
+
 describe('FRAME_OUTPUT_SCHEMA', () => {
   it('accepts a valid FrameOutput', () => {
     const result = FRAME_OUTPUT_SCHEMA.safeParse(buildValidFrameOutput());
@@ -109,5 +127,35 @@ describe('FRAME_OUTPUT_SCHEMA', () => {
       debug: { ...o.debug, trace: [{ field: 'skills' }] },
     };
     expect(FRAME_OUTPUT_SCHEMA.safeParse(bad).success).toBe(false);
+  });
+
+  it('accepts a FrameOutput without scanners (backward-compat)', () => {
+    const o = buildValidFrameOutput();
+    expect(FRAME_OUTPUT_SCHEMA.safeParse(o).success).toBe(true);
+  });
+
+  it('accepts a FrameOutput with scanners.tech_scout set to a minimum valid ScannerReport', () => {
+    const o = {
+      ...buildValidFrameOutput(),
+      scanners: { tech_scout: buildMinValidScannerReport() },
+    };
+    expect(FRAME_OUTPUT_SCHEMA.safeParse(o).success).toBe(true);
+  });
+
+  it('rejects scanners.tech_scout with an unknown scanner status', () => {
+    const o = {
+      ...buildValidFrameOutput(),
+      scanners: {
+        tech_scout: { ...buildMinValidScannerReport(), status: 'broken' },
+      },
+    };
+    expect(FRAME_OUTPUT_SCHEMA.safeParse(o).success).toBe(false);
+  });
+
+  it('accepts scanners: undefined and scanners: {}', () => {
+    const o1 = { ...buildValidFrameOutput(), scanners: undefined };
+    expect(FRAME_OUTPUT_SCHEMA.safeParse(o1).success).toBe(true);
+    const o2 = { ...buildValidFrameOutput(), scanners: {} };
+    expect(FRAME_OUTPUT_SCHEMA.safeParse(o2).success).toBe(true);
   });
 });

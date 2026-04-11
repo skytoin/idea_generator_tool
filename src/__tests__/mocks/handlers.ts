@@ -1,5 +1,10 @@
 import { http, HttpResponse } from 'msw';
 import { extractScenarioFromBody, getOpenAIResponse } from './openai-mock';
+import {
+  getHnResponse,
+  getArxivResponse,
+  getGithubResponse,
+} from './scanner-mocks';
 
 /** Mock Anthropic API response */
 export const anthropicHandler = http.post(
@@ -107,10 +112,96 @@ export const deepseekHandler = http.post(
     }),
 );
 
+/** Empty HN Algolia payload used when no scenario matches. */
+const EMPTY_HN_PAYLOAD = {
+  hits: [],
+  nbHits: 0,
+  page: 0,
+  nbPages: 0,
+  hitsPerPage: 20,
+  query: '',
+  params: '',
+};
+
+/** Empty arxiv Atom feed used when no scenario matches. */
+const EMPTY_ARXIV_FEED =
+  '<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>';
+
+/**
+ * Mock HN Algolia search endpoint with scenario routing. Tests set a
+ * body via setHnResponse(scenario, body) and pass the scenario name in
+ * the `x-test-scenario` header; anything else gets an empty payload.
+ */
+export const hnAlgoliaHandler = http.get(
+  'https://hn.algolia.com/api/v1/search',
+  ({ request }) => {
+    const scenario = request.headers.get('x-test-scenario');
+    if (scenario) {
+      const body = getHnResponse(scenario);
+      if (body !== undefined) return HttpResponse.json(body);
+    }
+    return HttpResponse.json(EMPTY_HN_PAYLOAD);
+  },
+);
+
+/**
+ * Mock arxiv Atom feed endpoint with scenario routing. Returns the
+ * registered XML string verbatim with atom+xml content type; falls
+ * back to an empty feed when no scenario is registered.
+ */
+export const arxivHandler = http.get(
+  'http://export.arxiv.org/api/query',
+  ({ request }) => {
+    const scenario = request.headers.get('x-test-scenario');
+    if (scenario) {
+      const xml = getArxivResponse(scenario);
+      if (xml !== undefined) {
+        return new HttpResponse(xml, {
+          headers: { 'content-type': 'application/atom+xml' },
+        });
+      }
+    }
+    return new HttpResponse(EMPTY_ARXIV_FEED, {
+      headers: { 'content-type': 'application/atom+xml' },
+    });
+  },
+);
+
+/**
+ * Mock GitHub repository search endpoint with scenario routing.
+ * A body of `{ __denied: <code> }` returns that HTTP status so tests
+ * can exercise rate-limit and forbidden paths without a real API.
+ */
+export const githubSearchHandler = http.get(
+  'https://api.github.com/search/repositories',
+  ({ request }) => {
+    const scenario = request.headers.get('x-test-scenario');
+    if (scenario) {
+      const body = getGithubResponse(scenario);
+      if (body && typeof body === 'object' && '__denied' in body) {
+        const denied = (body as { __denied: number }).__denied;
+        return new HttpResponse(JSON.stringify({ message: 'rate limited' }), {
+          status: denied,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (body !== undefined) return HttpResponse.json(body);
+    }
+    return HttpResponse.json({
+      total_count: 0,
+      incomplete_results: false,
+      items: [],
+    });
+  },
+);
+
 export const handlers = [
   anthropicHandler,
   openaiChatHandler,
   openaiResponsesHandler,
   googleHandler,
   deepseekHandler,
+  hnAlgoliaHandler,
+  arxivHandler,
+  githubSearchHandler,
 ];

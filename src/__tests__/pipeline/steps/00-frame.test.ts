@@ -1,7 +1,12 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { runFrame, computeProfileHash, type FrameDeps } from '../../../pipeline/steps/00-frame';
 import { InMemoryKVStore, type KVStore } from '../../../lib/utils/kv-store';
 import { setOpenAIResponse, resetOpenAIMock } from '../../mocks/openai-mock';
+import {
+  setHnResponse,
+  setGithubResponse,
+  resetScannerMocks,
+} from '../../mocks/scanner-mocks';
 import { FRAME_OUTPUT_SCHEMA } from '../../../lib/types/frame-output';
 import type { FrameInput } from '../../../lib/types/frame-input';
 import type { ScannerDirectives } from '../../../lib/types/scanner-directives';
@@ -319,5 +324,174 @@ describe('computeProfileHash', () => {
     const a = computeProfileHash(alice);
     const c = computeProfileHash(carol);
     expect(a).not.toBe(c);
+  });
+});
+
+/** Build a minimal expansion JSON body for the scanner expansion call. */
+function buildExpansionJson(): string {
+  return JSON.stringify({
+    expanded_keywords: ['fraud ml'],
+    arxiv_categories: [],
+    github_languages: ['python'],
+    domain_tags: [],
+  });
+}
+
+/** Build a minimal enrichment JSON body for the given signal count. */
+function buildEnrichmentJson(count: number): string {
+  return JSON.stringify({
+    signals: Array.from({ length: count }, (_, i) => ({
+      index: i,
+      title: `Enriched ${i}`,
+      snippet: `Enriched snippet ${i}`,
+      score: { novelty: 7, specificity: 8, recency: 9 },
+      category: 'tech_capability',
+    })),
+  });
+}
+
+/** Minimal HN hit payload for test MSW registration. */
+function buildHnHit() {
+  return {
+    objectID: '100',
+    title: 'ML fraud tool',
+    url: 'https://example.com/hn-post',
+    author: 'alice',
+    points: 150,
+    num_comments: 42,
+    created_at: '2026-03-14T12:00:00.000Z',
+    created_at_i: 1742558400,
+    _tags: ['story'],
+  };
+}
+
+/** Register every LLM + source scenario needed for a Tech Scout integration run. */
+function registerTechScoutScenarios(prefix: string): void {
+  setOpenAIResponse(`${prefix}-extract`, { content: extractionNullJson() });
+  setOpenAIResponse(`${prefix}-narrative`, { content: NARRATIVE_PROSE });
+  setOpenAIResponse(`${prefix}-directives`, {
+    content: JSON.stringify(defaultDirectives()),
+  });
+  setOpenAIResponse(`${prefix}-expansion`, { content: buildExpansionJson() });
+  setOpenAIResponse(`${prefix}-enrichment`, { content: buildEnrichmentJson(1) });
+  setHnResponse(`${prefix}-hn`, { hits: [buildHnHit()] });
+  setGithubResponse(`${prefix}-github`, {
+    total_count: 0,
+    incomplete_results: false,
+    items: [],
+  });
+}
+
+describe('runFrame — Tech Scout integration', () => {
+  afterEach(() => {
+    resetOpenAIMock();
+    resetScannerMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('attaches scanners.tech_scout when runTechScout=true', async () => {
+    registerTechScoutScenarios('ts1');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_HN', 'ts1-hn');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_GITHUB', 'ts1-github');
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_test');
+    const deps: FrameDeps = {
+      clock: () => FIXED_DATE,
+      kv: new InMemoryKVStore(),
+      scenarios: {
+        extract: 'ts1-extract',
+        narrative: 'ts1-narrative',
+        directives: 'ts1-directives',
+      },
+      runTechScout: true,
+      scannerScenarios: {
+        expansion: 'ts1-expansion',
+        enrichment: 'ts1-enrichment',
+      },
+    };
+    const result = await runFrame(alice, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.scanners).toBeDefined();
+    expect(result.value.scanners?.tech_scout).toBeDefined();
+    expect(result.value.scanners?.tech_scout?.scanner).toBe('tech_scout');
+    expect(['ok', 'partial', 'failed']).toContain(
+      result.value.scanners?.tech_scout?.status,
+    );
+    const parsed = FRAME_OUTPUT_SCHEMA.safeParse(result.value);
+    expect(parsed.success).toBe(true);
+  }, 20_000);
+
+  it('omits scanners field when runTechScout is false', async () => {
+    registerAllMockScenarios('ts2');
+    const deps: FrameDeps = {
+      clock: () => FIXED_DATE,
+      kv: new InMemoryKVStore(),
+      scenarios: {
+        extract: 'ts2-extract',
+        narrative: 'ts2-narrative',
+        directives: 'ts2-directives',
+      },
+      runTechScout: false,
+    };
+    const result = await runFrame(alice, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.scanners).toBeUndefined();
+  });
+
+  it('omits scanners field when runTechScout is unset', async () => {
+    registerAllMockScenarios('ts3');
+    const deps: FrameDeps = {
+      clock: () => FIXED_DATE,
+      kv: new InMemoryKVStore(),
+      scenarios: {
+        extract: 'ts3-extract',
+        narrative: 'ts3-narrative',
+        directives: 'ts3-directives',
+      },
+    };
+    const result = await runFrame(alice, deps);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.scanners).toBeUndefined();
+  });
+
+  it('degrades gracefully when runTechScout throws a synthetic error', async () => {
+    // Use vi.doMock via a runtime import swap: we simulate scanner crash
+    // by mocking the scanner module to throw. This test wires a spy
+    // through the frame pipeline's runTechScoutSafely helper.
+    const { runFrame: runFrameFresh } = await import('../../../pipeline/steps/00-frame');
+    // Stub the scanner module: override runTechScout to throw.
+    vi.doMock('../../../pipeline/scanners/tech-scout', () => ({
+      runTechScout: async () => {
+        throw new Error('scanner boom');
+      },
+    }));
+    // Re-import runFrame so the mock takes effect for this call.
+    vi.resetModules();
+    const mod = await import('../../../pipeline/steps/00-frame');
+    registerAllMockScenarios('ts4');
+    const deps: FrameDeps = {
+      clock: () => FIXED_DATE,
+      kv: new InMemoryKVStore(),
+      scenarios: {
+        extract: 'ts4-extract',
+        narrative: 'ts4-narrative',
+        directives: 'ts4-directives',
+      },
+      runTechScout: true,
+    };
+    const result = await mod.runFrame(alice, deps);
+    vi.doUnmock('../../../pipeline/scanners/tech-scout');
+    vi.resetModules();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.scanners?.tech_scout?.status).toBe('failed');
+    expect(result.value.scanners?.tech_scout?.errors.length).toBeGreaterThan(0);
+    expect(result.value.scanners?.tech_scout?.errors[0]?.kind).toBe(
+      'scanner_crashed',
+    );
+    // Silence unused warning for the first import.
+    void runFrameFresh;
   });
 });

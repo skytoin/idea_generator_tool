@@ -7,6 +7,8 @@ import {
 import type { FrameOutput } from '../../lib/types/frame-output';
 import type { KVStore } from '../../lib/utils/kv-store';
 import type { FounderProfile } from '../../lib/types/founder-profile';
+import type { ScannerDirectives } from '../../lib/types/scanner-directives';
+import type { ScannerReport } from '../../lib/types/scanner-report';
 import { extractProfile } from '../frame/extract-profile';
 import { applyAssumptions } from '../frame/apply-assumptions';
 import {
@@ -17,6 +19,8 @@ import {
   generateDirectives,
   type DirectivesResult,
 } from '../frame/generate-directives';
+import { runTechScout } from '../scanners/tech-scout';
+import { logger } from '../../lib/utils/logger';
 
 type Mode = 'explore' | 'refine' | 'open_direction';
 
@@ -28,6 +32,13 @@ export type FrameDeps = {
     extract?: string;
     narrative?: string;
     directives?: string;
+  };
+  /** When true, also runs Tech Scout after directives are generated. */
+  runTechScout?: boolean;
+  /** Per-scanner LLM scenario routing. Only used when runTechScout is true. */
+  scannerScenarios?: {
+    expansion?: string;
+    enrichment?: string;
   };
 };
 
@@ -115,6 +126,7 @@ async function runLLMPhases(
  * Assemble the final FrameOutput from the profile, narrative, directives,
  * and combined trace. The trace combines narrative trace entries with all
  * directive trace entries; cost_usd sums narrative and directives cost.
+ * If a scannerReport is provided, attaches it under `scanners.tech_scout`.
  */
 function assembleOutput(
   input: FrameInput,
@@ -122,6 +134,7 @@ function assembleOutput(
   narrativeOut: NarrativeResult,
   directivesOut: DirectivesResult,
   deps: FrameDeps,
+  scannerReport?: ScannerReport,
 ): FrameOutput {
   const traceEntries = [
     ...narrativeOut.trace.entries(),
@@ -139,7 +152,60 @@ function assembleOutput(
       cost_usd: narrativeOut.cost + directivesOut.cost,
       generated_at: deps.clock().toISOString(),
     },
+    scanners: scannerReport ? { tech_scout: scannerReport } : undefined,
   };
+}
+
+/**
+ * Build a synthetic failed ScannerReport when the Tech Scout scanner
+ * itself throws (which its Scanner contract forbids). Used as the
+ * graceful-degradation return value by runTechScoutSafely.
+ */
+function buildScannerCrashReport(
+  message: string,
+  generatedAt: string,
+): ScannerReport {
+  return {
+    scanner: 'tech_scout',
+    status: 'failed',
+    signals: [],
+    source_reports: [],
+    expansion_plan: null,
+    total_raw_items: 0,
+    signals_after_dedupe: 0,
+    signals_after_exclude: 0,
+    cost_usd: 0,
+    elapsed_ms: 0,
+    generated_at: generatedAt,
+    errors: [{ kind: 'scanner_crashed', message }],
+    warnings: [],
+  };
+}
+
+/**
+ * Run the Tech Scout scanner inside a try/catch so a hypothetical crash
+ * is converted into a failed ScannerReport rather than aborting the
+ * whole Frame run. The Scanner contract forbids throwing, but we still
+ * defend against it here so the caller sees a consistent shape.
+ */
+async function runTechScoutSafely(
+  directive: ScannerDirectives['tech_scout'],
+  profile: FounderProfile,
+  narrativeProse: string,
+  deps: FrameDeps,
+): Promise<ScannerReport> {
+  try {
+    return await runTechScout(directive, profile, narrativeProse, {
+      clock: deps.clock,
+      scenarios: deps.scannerScenarios,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    logger
+      .child({ scanner: 'tech_scout' })
+      .error({ message }, 'tech_scout crashed inside runFrame');
+    return buildScannerCrashReport(message, deps.clock().toISOString());
+  }
 }
 
 /**
@@ -187,8 +253,11 @@ async function runAllLLMPhases(
 
 /**
  * Frame orchestrator. Validates the input, extracts the profile, runs the
- * narrative + directives LLM phases, and persists the result keyed by a
- * stable profile_hash so the run can be inspected later.
+ * narrative + directives LLM phases, optionally runs Tech Scout, and then
+ * persists the result keyed by a stable profile_hash so the run can be
+ * inspected later. Tech Scout runs only when `deps.runTechScout === true`
+ * and any failure is wrapped into a synthetic failed ScannerReport so the
+ * Frame run still succeeds.
  */
 export async function runFrame(
   input: FrameInput,
@@ -202,12 +271,21 @@ export async function runFrame(
   const existingIdea = parsed.value.existing_idea ?? null;
   const llm = await runAllLLMPhases(phase1.value, parsed.value.mode, existingIdea, deps);
   if (!llm.ok) return err(llm.error);
+  const scannerReport = deps.runTechScout
+    ? await runTechScoutSafely(
+        llm.value.directives.directives.tech_scout,
+        phase1.value,
+        llm.value.narrative.narrative.prose,
+        deps,
+      )
+    : undefined;
   const output = assembleOutput(
     parsed.value,
     phase1.value,
     llm.value.narrative,
     llm.value.directives,
     deps,
+    scannerReport,
   );
   const persisted = await persistOutput(deps.kv, profileHash, output);
   if (!persisted.ok) return err(persisted.error);

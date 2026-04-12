@@ -60,3 +60,34 @@ export function sortByScore(signals: Signal[]): Signal[] {
 export function keepTop(signals: Signal[], n: number): Signal[] {
   return sortByScore(signals).slice(0, n);
 }
+
+/**
+ * Take up to `perSourceCap` signals from each unique source, preserving
+ * the original order within each source. This is a fairness mechanism
+ * applied BEFORE enrichment so the enricher sees a balanced sample from
+ * every adapter, not just whichever adapter happened to produce the most
+ * raw signals first. Without this, one verbose source (e.g., HN returning
+ * 90 hits) would fill the enrichment budget entirely and silently drop
+ * every signal from sources with fewer raw results.
+ *
+ * Input order: adapter-registry order (HN → arxiv → GitHub in v1).
+ * Output order: first `perSourceCap` from HN, then first `perSourceCap`
+ * from arxiv, then first `perSourceCap` from GitHub.
+ */
+export function interleaveBySource(
+  signals: Signal[],
+  perSourceCap: number,
+): Signal[] {
+  if (perSourceCap <= 0) return [];
+  const bySource = new Map<string, Signal[]>();
+  for (const s of signals) {
+    const bucket = bySource.get(s.source) ?? [];
+    bucket.push(s);
+    bySource.set(s.source, bucket);
+  }
+  const out: Signal[] = [];
+  for (const bucket of bySource.values()) {
+    out.push(...bucket.slice(0, perSourceCap));
+  }
+  return out;
+}

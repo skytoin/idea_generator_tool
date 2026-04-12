@@ -9,7 +9,12 @@ import type { SourceReport } from '../../../lib/types/source-report';
 import type { ScannerReport } from '../../../lib/types/scanner-report';
 import { planQueries as llmPlanQueries } from './query-planner';
 import { enrichSignals } from './enricher';
-import { dedupeSignals, filterExcluded, keepTop } from './post-process';
+import {
+  dedupeSignals,
+  filterExcluded,
+  interleaveBySource,
+  keepTop,
+} from './post-process';
 import { TECH_SCOUT_ADAPTERS } from './adapters';
 import { withTimeout } from '../../../lib/utils/with-timeout';
 import { classifyError } from './classify-error';
@@ -19,14 +24,70 @@ const PER_SOURCE_TIMEOUT_MS = 60_000;
 const MAX_FINAL_SIGNALS = 25;
 
 /**
+ * Max signals per source fed into enrichment. At 15 per source × 3 sources
+ * that's up to 45 signals passed to the enrichment LLM — bounded cost
+ * (~$0.06 at gpt-4o pricing) while guaranteeing every source gets fair
+ * representation before the final top-N cut.
+ */
+const PER_SOURCE_CAP_FOR_ENRICHMENT = 15;
+
+/**
+ * Upper bound on the number of signals the enricher will actually process
+ * in a single LLM call. Sized above `PER_SOURCE_CAP × len(adapters)` so
+ * the enricher never silently truncates the fair interleaving.
+ */
+const ENRICHMENT_TOP_N = 60;
+
+/**
+ * Map from directive target_source aliases to adapter names. The directives
+ * schema uses short aliases ('hn', 'arxiv', 'github'); adapters register
+ * with their full names ('hn_algolia', etc.). This table bridges them so
+ * the orchestrator can respect directive.target_sources when filtering.
+ */
+const SOURCE_ALIAS_TO_ADAPTER_NAME: Record<string, string> = {
+  hn: 'hn_algolia',
+  arxiv: 'arxiv',
+  github: 'github',
+  // 'producthunt' is in the schema enum but intentionally unmapped
+  // because no adapter exists yet.
+};
+
+/**
+ * Filter the adapter registry by the directive's target_sources list.
+ * Empty or missing target_sources falls back to the full registry. If the
+ * filter produces zero runnable adapters (e.g., directive only listed
+ * 'producthunt' which has no adapter), we also fall back to the full
+ * registry so the scanner never runs with no sources.
+ */
+function selectAdapters(
+  directive: ScannerDirectives['tech_scout'],
+  registry: readonly SourceAdapter[],
+): readonly SourceAdapter[] {
+  const requested = directive.target_sources ?? [];
+  if (requested.length === 0) return registry;
+  const allowed = new Set(
+    requested
+      .map((src) => SOURCE_ALIAS_TO_ADAPTER_NAME[src])
+      .filter((n): n is string => n !== undefined),
+  );
+  const selected = registry.filter((a) => allowed.has(a.name));
+  return selected.length > 0 ? selected : registry;
+}
+
+/**
  * Per-adapter phase result. Wraps the adapter's normalized signals with
  * the SourceReport the orchestrator will roll up into the ScannerReport.
  */
 type AdapterOutcome = { signals: Signal[]; report: SourceReport };
 
-/** Output of the post-processing phase (dedupe/exclude/top-N). */
-type PostProcessResult = {
-  topSignals: Signal[];
+/**
+ * Output of the pre-enrichment filtering phase. `candidates` is the set
+ * fed into the enricher AFTER dedupe/exclude/interleave have run — it
+ * contains up to PER_SOURCE_CAP_FOR_ENRICHMENT signals from each source
+ * so every adapter gets fair representation in the final output.
+ */
+type PrefilterResult = {
+  candidates: Signal[];
   totalRaw: number;
   afterDedupe: number;
   afterExclude: number;
@@ -48,21 +109,27 @@ export const runTechScout: Scanner = async (
   const start = Date.now();
   const warnings: string[] = [];
   const plan = await resolvePlan(directive, profile, deps, warnings);
+  const selectedAdapters = selectAdapters(directive, TECH_SCOUT_ADAPTERS);
   const perSource = await runAdaptersInParallel(
     plan.value,
     directive,
-    TECH_SCOUT_ADAPTERS,
+    selectedAdapters,
   );
-  const postProcessed = postProcess(perSource, directive.exclude);
-  const enrichment = await enrichSignals(postProcessed.topSignals, {
+  const prefilter = prefilterSignals(perSource, directive.exclude);
+  const enrichment = await enrichSignals(prefilter.candidates, {
     scenario: deps.scenarios?.enrichment,
+    topN: ENRICHMENT_TOP_N,
   });
   warnings.push(...enrichment.warnings);
+  // Top-N the ENRICHED signals so the final picks reflect real LLM-scored
+  // quality, not the arbitrary default 5/5/5 that every adapter assigns.
+  const finalSignals = keepTop(enrichment.signals, MAX_FINAL_SIGNALS);
   const report = assembleReport({
     plan,
     perSource,
-    postProcessed,
+    prefilter,
     enrichment,
+    finalSignals,
     warnings,
     startedAt: start,
     clock: deps.clock,
@@ -87,8 +154,9 @@ function logScanComplete(report: ScannerReport): void {
 type AssembleArgs = {
   plan: { ok: boolean; value: ExpandedQueryPlan };
   perSource: AdapterOutcome[];
-  postProcessed: PostProcessResult;
+  prefilter: PrefilterResult;
   enrichment: { signals: Signal[]; cost_usd: number; warnings: string[] };
+  finalSignals: Signal[];
   warnings: string[];
   startedAt: number;
   clock: () => Date;
@@ -100,14 +168,14 @@ function assembleReport(args: AssembleArgs): ScannerReport {
   return {
     scanner: 'tech_scout',
     status: computeStatus(sourceReports),
-    signals: args.enrichment.signals,
+    signals: args.finalSignals,
     source_reports: sourceReports,
     expansion_plan: args.plan.ok
       ? (args.plan.value as unknown as Record<string, unknown>)
       : null,
-    total_raw_items: args.postProcessed.totalRaw,
-    signals_after_dedupe: args.postProcessed.afterDedupe,
-    signals_after_exclude: args.postProcessed.afterExclude,
+    total_raw_items: args.prefilter.totalRaw,
+    signals_after_dedupe: args.prefilter.afterDedupe,
+    signals_after_exclude: args.prefilter.afterExclude,
     cost_usd: args.enrichment.cost_usd,
     elapsed_ms: Date.now() - args.startedAt,
     generated_at: args.clock().toISOString(),
@@ -221,19 +289,24 @@ function buildErrorReport(
   };
 }
 
-/** Flatten, dedupe, exclude, sort, and cap the signals from every adapter. */
-function postProcess(
+/**
+ * Flatten, dedupe, exclude, and fairly interleave signals across sources
+ * so the enricher sees a balanced mix. NO top-N cap here — that happens
+ * AFTER enrichment so the final picks use real LLM-scored quality instead
+ * of the arbitrary default score every adapter assigns pre-enrichment.
+ */
+function prefilterSignals(
   perSource: AdapterOutcome[],
   exclude: readonly string[],
-): PostProcessResult {
+): PrefilterResult {
   const flat = perSource.flatMap((r) => r.signals);
   const totalRaw = flat.length;
   const deduped = dedupeSignals(flat);
   const afterDedupe = deduped.length;
   const excluded = filterExcluded(deduped, exclude);
   const afterExclude = excluded.length;
-  const topSignals = keepTop(excluded, MAX_FINAL_SIGNALS);
-  return { topSignals, totalRaw, afterDedupe, afterExclude };
+  const candidates = interleaveBySource(excluded, PER_SOURCE_CAP_FOR_ENRICHMENT);
+  return { candidates, totalRaw, afterDedupe, afterExclude };
 }
 
 /** Roll up per-source statuses into the aggregate ScannerReport status. */

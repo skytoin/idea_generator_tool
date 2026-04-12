@@ -8,6 +8,12 @@ import {
   resetScannerMocks,
 } from '../../../mocks/scanner-mocks';
 import { SAMPLE_ARXIV_XML } from '../../../mocks/arxiv-fixtures';
+import {
+  hnAlgoliaAdapter,
+  arxivAdapter,
+  githubAdapter,
+} from '../../../../pipeline/scanners/tech-scout/adapters';
+import { TimeoutError } from '../../../../lib/utils/with-timeout';
 import type { FounderProfile } from '../../../../lib/types/founder-profile';
 import type { ScannerDirectives } from '../../../../lib/types/scanner-directives';
 
@@ -474,5 +480,117 @@ describe('runTechScout — MAX_FINAL_SIGNALS cap', () => {
     );
 
     expect(report.signals.length).toBeLessThanOrEqual(25);
+  });
+});
+
+describe('runTechScout — all ok_empty', () => {
+  afterEach(teardown);
+
+  it('returns report.status === "ok" when every source returns zero signals', async () => {
+    setOpenAIResponse('expansion-ok', {
+      content: buildExpansionJson({ arxiv_categories: [] }),
+    });
+    // Enrichment will still be called with 0 inputs → register a valid
+    // empty-signals response so the enricher succeeds.
+    setOpenAIResponse('enrichment-ok', { content: buildEnrichmentJson(0) });
+    // All 3 adapters return explicitly empty bodies (not errors).
+    setHnResponse('hn-scanner', { hits: [] });
+    setGithubResponse('github-scanner', {
+      total_count: 0,
+      incomplete_results: false,
+      items: [],
+    });
+    stubEnvFor3Scanners();
+
+    const report = await runTechScout(
+      buildDirective(),
+      buildProfile(),
+      'narrative prose',
+      {
+        clock: FIXED_CLOCK,
+        scenarios: { expansion: 'expansion-ok', enrichment: 'enrichment-ok' },
+      },
+    );
+
+    // Every source succeeded, just with zero signals → aggregate is 'ok'.
+    expect(report.status).toBe('ok');
+    expect(report.signals).toEqual([]);
+    expect(report.total_raw_items).toBe(0);
+    for (const sr of report.source_reports) {
+      expect(['ok', 'ok_empty']).toContain(sr.status);
+    }
+  });
+});
+
+describe('runTechScout — all timeouts', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    teardown();
+  });
+
+  it('returns report.status === "failed" when every adapter throws a timeout', async () => {
+    setOpenAIResponse('expansion-ok', { content: buildExpansionJson() });
+    setOpenAIResponse('enrichment-ok', { content: buildEnrichmentJson(0) });
+    stubEnvFor3Scanners();
+
+    // Force each adapter's fetch() to throw TimeoutError synchronously
+    // so the orchestrator's classifyError maps every source to 'timeout'.
+    const timeoutError = new TimeoutError(60_000);
+    vi.spyOn(hnAlgoliaAdapter, 'fetch').mockRejectedValue(timeoutError);
+    vi.spyOn(arxivAdapter, 'fetch').mockRejectedValue(timeoutError);
+    vi.spyOn(githubAdapter, 'fetch').mockRejectedValue(timeoutError);
+
+    const report = await runTechScout(
+      buildDirective(),
+      buildProfile(),
+      'narrative prose',
+      {
+        clock: FIXED_CLOCK,
+        scenarios: { expansion: 'expansion-ok', enrichment: 'enrichment-ok' },
+      },
+    );
+
+    expect(report.status).toBe('failed');
+    expect(report.source_reports).toHaveLength(3);
+    for (const sr of report.source_reports) {
+      expect(sr.status).toBe('timeout');
+      expect(sr.error?.kind).toBe('timeout');
+      expect(sr.signals_count).toBe(0);
+    }
+    expect(report.signals).toEqual([]);
+  });
+});
+
+describe('runTechScout — mixed ok_empty plus denied', () => {
+  afterEach(teardown);
+
+  it('returns report.status === "partial" when some sources are ok_empty and one is denied', async () => {
+    setOpenAIResponse('expansion-ok', {
+      content: buildExpansionJson({ arxiv_categories: [] }),
+    });
+    setOpenAIResponse('enrichment-ok', { content: buildEnrichmentJson(0) });
+    // HN ok_empty, arxiv ok_empty (no categories planned), github denied.
+    setHnResponse('hn-scanner', { hits: [] });
+    setGithubResponse('github-scanner', { __denied: 403 });
+    stubEnvFor3Scanners();
+
+    const report = await runTechScout(
+      buildDirective(),
+      buildProfile(),
+      'narrative prose',
+      {
+        clock: FIXED_CLOCK,
+        scenarios: { expansion: 'expansion-ok', enrichment: 'enrichment-ok' },
+      },
+    );
+
+    // One denied + two ok_empty is NOT all-ok and NOT all-failed → partial.
+    expect(report.status).toBe('partial');
+    const gh = report.source_reports.find((s) => s.name === 'github');
+    expect(gh?.status).toBe('denied');
+    const hn = report.source_reports.find((s) => s.name === 'hn_algolia');
+    expect(hn?.status).toBe('ok_empty');
+    const arx = report.source_reports.find((s) => s.name === 'arxiv');
+    expect(arx?.status).toBe('ok_empty');
   });
 });

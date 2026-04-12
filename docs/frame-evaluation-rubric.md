@@ -70,3 +70,58 @@ Run the rubric on each of these:
   non-English additional context stress test
 - `src/__tests__/pipeline/frame/fixtures/eve-adversarial.json` —
   adversarial input attempting prompt injection
+
+## Layer 2 — Tech Scout v1.0
+
+> To run the Layer 2 evaluation, visit
+> http://localhost:3000/frame, fill the form, click Submit, and
+> scroll to the "Scanner: tech_scout" section in the debug view.
+> Walk through the checklist below.
+
+1. **Non-zero signals.** A live run on the carol-full fixture
+   returns at least one signal in `scanners.tech_scout.signals`.
+   Zero signals on a real-domain founder is a smoke test failure.
+2. **Signals are concrete, dated, and specific.** Each signal has a
+   plausible title, a non-generic snippet (numbers, dates, names),
+   and a `date` value. Generic SEO spam ("the best fraud tools in
+   2026") is a fail.
+3. **Expansion is richer than the directive.** The
+   `expansion_plan.expanded_keywords` array is strictly larger than
+   `directive.tech_scout.keywords` and contains synonyms or related
+   terms (e.g. "anomaly detection" alongside "fraud detection"),
+   not just the original list echoed back.
+4. **Source coverage.** All 3 source_reports — `hn_algolia`,
+   `arxiv`, `github` — have a `status` of `ok` or `ok_empty`. If
+   every source is `timeout` or `denied`, the scanner is broken
+   end-to-end.
+5. **Anti-targets excluded.** No signal title or snippet contains
+   any term from `profile.anti_targets.value`. Spot-check the
+   carol fixture for "crypto" / "gambling" leakage.
+6. **Cost ceiling.** `scanners.tech_scout.cost_usd` is under $0.20
+   per scanner run on gpt-4o. Anything higher is a budget breach
+   and should be flagged before shipping.
+7. **Latency ceiling.** Total wall-clock time for the full
+   pipeline (Layer 1 + Layer 2) stays under 90 seconds. The arxiv
+   adapter contributes ~3s of mandatory rate-limit sleep per query.
+8. **Debug view renders Scanner Report.** The admin debug page
+   renders a "Scanner: tech_scout" section directly under the
+   `cost_usd` line in `FrameDebugView`. Absence is a render
+   regression.
+9. **Per-source query visibility.** Each source row in the report
+   shows the queries that ran for that adapter (the `queries_ran`
+   labels), so reviewers can audit what was actually fetched.
+10. **Signal listing is complete.** Every entry in the signals
+    list shows title + URL + score + snippet + category. Missing
+    any of these fields means the renderer is dropping data.
+11. **Expansion plan is visible.** The expansion plan is rendered
+    inside the expandable `<details>` element so reviewers can
+    audit the LLM-derived keywords without scrolling through raw
+    JSON.
+12. **Warnings/errors surface.** When the scanner produces
+    warnings or errors, both lists appear in their own callouts in
+    the debug view rather than being silently swallowed.
+13. **Smell test.** Read the signals out loud. Are they actually
+    about the founder's stated domain (e.g. SOC-2 audit tooling
+    for Carol), or random tech that happened to match a keyword?
+    Off-domain signals indicate the directive or expansion phase
+    is too broad — fix the prompt before shipping.

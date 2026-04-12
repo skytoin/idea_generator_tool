@@ -88,12 +88,18 @@ describe('classifyError — additional edge cases', () => {
     expect(classifyError(new UpstreamError())).toBe('denied');
   });
 
-  it('classifies "rate_limit exceeded" with underscore as failed (space-only match)', () => {
-    // Current classifier matches literal "rate limit" (with a space).
-    // The underscore variant falls through to the default failed bucket.
-    // This test documents that actual behavior so any future tightening
-    // of the regex is a deliberate change caught by this test.
-    expect(classifyError(new Error('rate_limit exceeded'))).toBe('failed');
+  it('classifies "rate_limit exceeded" with underscore as denied', () => {
+    // The classifier matches /rate[_ -]?limit/ so it accepts
+    // "rate limit", "rate_limit", "rate-limit", and "ratelimit".
+    expect(classifyError(new Error('rate_limit exceeded'))).toBe('denied');
+  });
+
+  it('classifies "rate-limit exceeded" with hyphen as denied', () => {
+    expect(classifyError(new Error('rate-limit exceeded'))).toBe('denied');
+  });
+
+  it('classifies "ratelimit exceeded" with no separator as denied', () => {
+    expect(classifyError(new Error('ratelimit exceeded'))).toBe('denied');
   });
 
   it('classifies "RATE LIMIT" uppercase as denied via toLowerCase()', () => {

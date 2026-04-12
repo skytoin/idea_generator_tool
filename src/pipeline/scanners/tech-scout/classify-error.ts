@@ -21,8 +21,10 @@ export function classifyError(e: unknown): ErrorStatus {
   if (e instanceof Error) {
     if (e.name === 'AbortError') return 'timeout';
     const msg = e.message.toLowerCase();
+    // Accept both "rate limit" and "rate_limit" / "rate-limit" spellings
+    // since APIs use different conventions in their error strings.
     if (
-      msg.includes('rate limit') ||
+      /rate[_ -]?limit/.test(msg) ||
       msg.includes('429') ||
       msg.includes('denied')
     ) {

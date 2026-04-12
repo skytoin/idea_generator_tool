@@ -159,3 +159,137 @@ describe('keepTop', () => {
     expect(keepTop([], 5)).toEqual([]);
   });
 });
+
+describe('dedupeSignals — adversarial inputs', () => {
+  it('collapses 5 signals with identical URL to exactly 1 (highest-scoring)', () => {
+    const sharedUrl = 'https://dup.example/x';
+    const signals = [
+      buildSignal({
+        url: sharedUrl,
+        score: { novelty: 1, specificity: 1, recency: 1 },
+        raw: { which: 'a' },
+      }),
+      buildSignal({
+        url: sharedUrl,
+        score: { novelty: 4, specificity: 4, recency: 4 },
+        raw: { which: 'b' },
+      }),
+      buildSignal({
+        url: sharedUrl,
+        score: { novelty: 10, specificity: 10, recency: 10 },
+        raw: { which: 'winner' },
+      }),
+      buildSignal({
+        url: sharedUrl,
+        score: { novelty: 3, specificity: 3, recency: 3 },
+        raw: { which: 'd' },
+      }),
+      buildSignal({
+        url: sharedUrl,
+        score: { novelty: 7, specificity: 7, recency: 7 },
+        raw: { which: 'e' },
+      }),
+    ];
+    const result = dedupeSignals(signals);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.raw).toEqual({ which: 'winner' });
+  });
+});
+
+describe('filterExcluded — adversarial inputs', () => {
+  it('matches an excluded term in mixed-case input', () => {
+    const kept = buildSignal({ title: 'Plain ML', url: 'https://a.com' });
+    const mixed = buildSignal({ title: 'Crypto rocket', url: 'https://b.com' });
+    const upper = buildSignal({ title: 'CRYPTO moonshot', url: 'https://c.com' });
+    const wacky = buildSignal({ title: 'CrYpToPunks', url: 'https://d.com' });
+    const result = filterExcluded([kept, mixed, upper, wacky], ['crypto']);
+    expect(result.map((s) => s.title)).toEqual(['Plain ML']);
+  });
+
+  it('matches an excluded term written in uppercase', () => {
+    const kept = buildSignal({ title: 'Plain ML', url: 'https://a.com' });
+    const dropped = buildSignal({ title: 'crypto token', url: 'https://b.com' });
+    // Exclude written in uppercase — must still strip lowercase input.
+    const result = filterExcluded([kept, dropped], ['CRYPTO']);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.title).toBe('Plain ML');
+  });
+
+  it('does not crash on zero-length signals array with empty exclude list', () => {
+    expect(filterExcluded([], [])).toEqual([]);
+  });
+
+  it('returns input reference unchanged on empty exclude list', () => {
+    const signals = [buildSignal()];
+    // Current fast-path behavior returns the same reference.
+    expect(filterExcluded(signals, [])).toBe(signals);
+  });
+});
+
+describe('keepTop — adversarial inputs', () => {
+  it('returns all signals when n exceeds input length', () => {
+    const signals = [
+      buildSignal({ url: 'https://a.com' }),
+      buildSignal({ url: 'https://b.com' }),
+      buildSignal({ url: 'https://c.com' }),
+    ];
+    const result = keepTop(signals, 100);
+    expect(result).toHaveLength(3);
+  });
+
+  it('returns empty when n is 0 even with many signals', () => {
+    const signals = Array.from({ length: 5 }, (_, i) =>
+      buildSignal({ url: `https://x.com/${i}` }),
+    );
+    expect(keepTop(signals, 0)).toEqual([]);
+  });
+});
+
+describe('sortByScore — stability', () => {
+  it('preserves input order for signals with identical composite scores', () => {
+    // All signals share the same composite score (15). A stable sort
+    // must return them in their original input order.
+    const a = buildSignal({
+      url: 'https://a.com',
+      title: 'A',
+      score: { novelty: 5, specificity: 5, recency: 5 },
+    });
+    const b = buildSignal({
+      url: 'https://b.com',
+      title: 'B',
+      score: { novelty: 5, specificity: 5, recency: 5 },
+    });
+    const c = buildSignal({
+      url: 'https://c.com',
+      title: 'C',
+      score: { novelty: 5, specificity: 5, recency: 5 },
+    });
+    const d = buildSignal({
+      url: 'https://d.com',
+      title: 'D',
+      score: { novelty: 5, specificity: 5, recency: 5 },
+    });
+    const result = sortByScore([a, b, c, d]);
+    expect(result.map((s) => s.title)).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('places higher-scoring signals first but keeps ties stable', () => {
+    const tieA = buildSignal({
+      url: 'https://tieA.com',
+      title: 'tieA',
+      score: { novelty: 5, specificity: 5, recency: 5 },
+    });
+    const tieB = buildSignal({
+      url: 'https://tieB.com',
+      title: 'tieB',
+      score: { novelty: 5, specificity: 5, recency: 5 },
+    });
+    const high = buildSignal({
+      url: 'https://high.com',
+      title: 'high',
+      score: { novelty: 10, specificity: 10, recency: 10 },
+    });
+    const result = sortByScore([tieA, high, tieB]);
+    expect(result.map((s) => s.title)).toEqual(['high', 'tieA', 'tieB']);
+  });
+});

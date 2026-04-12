@@ -54,3 +54,57 @@ describe('classifyError', () => {
     expect(classifyError(new Error('network reset'))).toBe('failed');
   });
 });
+
+describe('classifyError — additional edge cases', () => {
+  it('classifies "429: too many requests" as denied', () => {
+    expect(classifyError(new Error('429: too many requests'))).toBe('denied');
+  });
+
+  it('classifies plain number 42 as failed', () => {
+    expect(classifyError(42)).toBe('failed');
+  });
+
+  it('classifies null as failed', () => {
+    expect(classifyError(null)).toBe('failed');
+  });
+
+  it('classifies a non-rate-limit Error subclass as failed', () => {
+    class MyNetworkError extends Error {
+      constructor() {
+        super('connection reset by peer');
+        this.name = 'MyNetworkError';
+      }
+    }
+    expect(classifyError(new MyNetworkError())).toBe('failed');
+  });
+
+  it('classifies an Error subclass whose message matches rate-limit as denied', () => {
+    class UpstreamError extends Error {
+      constructor() {
+        super('upstream 429 retry later');
+        this.name = 'UpstreamError';
+      }
+    }
+    expect(classifyError(new UpstreamError())).toBe('denied');
+  });
+
+  it('classifies "rate_limit exceeded" with underscore as failed (space-only match)', () => {
+    // Current classifier matches literal "rate limit" (with a space).
+    // The underscore variant falls through to the default failed bucket.
+    // This test documents that actual behavior so any future tightening
+    // of the regex is a deliberate change caught by this test.
+    expect(classifyError(new Error('rate_limit exceeded'))).toBe('failed');
+  });
+
+  it('classifies "RATE LIMIT" uppercase as denied via toLowerCase()', () => {
+    expect(classifyError(new Error('RATE LIMIT HIT'))).toBe('denied');
+  });
+
+  it('classifies boolean true as failed', () => {
+    expect(classifyError(true)).toBe('failed');
+  });
+
+  it('classifies Symbol as failed', () => {
+    expect(classifyError(Symbol('weird'))).toBe('failed');
+  });
+});

@@ -158,12 +158,20 @@ async function readErrorDetails(response: Response): Promise<string | undefined>
   }
 }
 
-/** POST current form state to /api/frame/extract and return the new SubmitState. */
+/**
+ * POST current form state to /api/frame/extract and return the new
+ * SubmitState. Always sets `x-run-tech-scout: 1` so the Frame pipeline
+ * runs the Layer 2 Tech Scout scanner on every submit — the debug view
+ * then surfaces the scanner report to the founder.
+ */
 async function submitForm(input: FormState): Promise<SubmitState> {
   try {
     const response = await fetch('/api/frame/extract', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-run-tech-scout': '1',
+      },
       body: JSON.stringify(input),
     });
     if (!response.ok) {

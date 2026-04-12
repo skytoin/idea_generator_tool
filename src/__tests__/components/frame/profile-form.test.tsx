@@ -194,6 +194,23 @@ describe('ProfileForm', () => {
         cost_usd: 0.01,
         generated_at: '2026-04-08T00:00:00.000Z',
       },
+      scanners: {
+        tech_scout: {
+          scanner: 'tech_scout',
+          status: 'ok' as const,
+          signals: [],
+          source_reports: [],
+          expansion_plan: null,
+          total_raw_items: 0,
+          signals_after_dedupe: 0,
+          signals_after_exclude: 0,
+          cost_usd: 0,
+          elapsed_ms: 0,
+          generated_at: '2026-04-08T00:00:00.000Z',
+          errors: [],
+          warnings: [],
+        },
+      },
     };
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -221,6 +238,13 @@ describe('ProfileForm', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^submit$/i }));
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
+    // Verify the submit request included the x-run-tech-scout header.
+    const firstCall = mockFetch.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const requestInit = firstCall?.[1] as RequestInit | undefined;
+    const headers = requestInit?.headers as Record<string, string> | undefined;
+    expect(headers).toBeDefined();
+    expect(headers?.['x-run-tech-scout']).toBe('1');
     await waitFor(() =>
       expect(screen.getByText(/profile_hash/i)).toBeInTheDocument(),
     );

@@ -359,4 +359,57 @@ describe('Layer 1 + Tech Scout end-to-end smoke test', () => {
     },
     40_000,
   );
+
+  it(
+    'still returns ok when every adapter returns zero items',
+    async () => {
+      // Rewire every scanner mock to return an explicitly empty body so
+      // the whole Tech Scout run produces zero signals. LLM scenarios
+      // stay the same — only the adapter HTTP payloads change.
+      resetScannerMocks();
+      const EMPTY_HN = {
+        hits: [],
+        nbHits: 0,
+        page: 0,
+        nbPages: 0,
+        hitsPerPage: 20,
+        query: '',
+        params: '',
+      };
+      const EMPTY_ARXIV_XML =
+        '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<feed xmlns="http://www.w3.org/2005/Atom"></feed>';
+      const EMPTY_GITHUB = {
+        total_count: 0,
+        incomplete_results: false,
+        items: [],
+      };
+      setHnResponse('hn-smoke', EMPTY_HN);
+      setArxivResponse('arxiv-smoke', EMPTY_ARXIV_XML);
+      setGithubResponse('github-smoke', EMPTY_GITHUB);
+
+      const res = await POST(buildRequest());
+      expect(res.status).toBe(200);
+      const output = (await res.json()) as FrameOutput;
+      const report = output.scanners?.tech_scout;
+      expect(report).toBeDefined();
+      // Zero items is not a failure — every source succeeded cleanly.
+      expect(report?.status).toBe('ok');
+      expect(report?.signals.length).toBe(0);
+      expect(report?.total_raw_items).toBe(0);
+      // Every source_report is ok_empty (no failed/denied anywhere).
+      for (const sr of report?.source_reports ?? []) {
+        expect(sr.status).toBe('ok_empty');
+      }
+      // No errors. Warnings may only contain enrichment-related notes
+      // (the enricher is called with zero inputs and does not need to
+      // run, so usually there are no warnings at all).
+      expect(report?.errors).toEqual([]);
+      for (const w of report?.warnings ?? []) {
+        // Permit enrichment warnings; forbid anything else.
+        expect(w.startsWith('enrichment_')).toBe(true);
+      }
+    },
+    30_000,
+  );
 });

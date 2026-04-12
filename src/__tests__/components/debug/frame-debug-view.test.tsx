@@ -2,10 +2,62 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { FrameDebugView } from '../../../components/debug/frame-debug-view';
 import type { FrameOutput } from '../../../lib/types/frame-output';
+import type { ScannerReport } from '../../../lib/types/scanner-report';
 
-/** Build a valid FrameOutput with one stated field and one assumed field. */
-function buildOutput(): FrameOutput {
+/** Build a valid ScannerReport fixture for tests that exercise scanner output. */
+function buildScannerReport(): ScannerReport {
   return {
+    scanner: 'tech_scout',
+    status: 'ok',
+    signals: [
+      {
+        source: 'hn_algolia',
+        title: 'Test scanner signal title',
+        url: 'https://example.com/signal',
+        date: '2026-03-14T12:00:00.000Z',
+        snippet: 'Test snippet',
+        score: { novelty: 7, specificity: 8, recency: 9 },
+        category: 'tech_capability',
+        raw: {},
+      },
+    ],
+    source_reports: [
+      {
+        name: 'hn_algolia',
+        status: 'ok',
+        signals_count: 1,
+        queries_ran: ['hn: fraud ml'],
+        queries_with_zero_results: [],
+        error: null,
+        elapsed_ms: 120,
+        cost_usd: 0,
+      },
+    ],
+    expansion_plan: {
+      expanded_keywords: ['react'],
+      arxiv_categories: [],
+      github_languages: [],
+      domain_tags: [],
+      timeframe_iso: '2025-10-01T00:00:00.000Z',
+    },
+    total_raw_items: 1,
+    signals_after_dedupe: 1,
+    signals_after_exclude: 1,
+    cost_usd: 0.0001,
+    elapsed_ms: 500,
+    generated_at: '2026-04-09T12:00:00.000Z',
+    errors: [],
+    warnings: [],
+  };
+}
+
+/**
+ * Build a valid FrameOutput with one stated field and one assumed field.
+ * Pass `{ withScanners: true }` to attach a ScannerReport under
+ * output.scanners.tech_scout.
+ */
+function buildOutput(opts: { withScanners?: boolean } = {}): FrameOutput {
+  const base: FrameOutput = {
     mode: 'explore',
     existing_idea: null,
     profile: {
@@ -78,6 +130,10 @@ function buildOutput(): FrameOutput {
       generated_at: '2026-04-09T12:00:00.000Z',
     },
   };
+  if (opts.withScanners) {
+    base.scanners = { tech_scout: buildScannerReport() };
+  }
+  return base;
 }
 
 describe('FrameDebugView', () => {
@@ -174,5 +230,21 @@ describe('FrameDebugView', () => {
   it('renders the trace entry count in the summary', () => {
     render(<FrameDebugView output={buildOutput()} error={null} />);
     expect(screen.getByText(/3 field->consumer pairs/)).toBeInTheDocument();
+  });
+
+  it('renders the ScannerReportView when scanners.tech_scout is defined', () => {
+    render(
+      <FrameDebugView
+        output={buildOutput({ withScanners: true })}
+        error={null}
+      />,
+    );
+    expect(screen.getByText(/Scanner: tech_scout/i)).toBeInTheDocument();
+    expect(screen.getByText(/Test scanner signal title/)).toBeInTheDocument();
+  });
+
+  it('does not render the scanner section when scanners is undefined', () => {
+    render(<FrameDebugView output={buildOutput()} error={null} />);
+    expect(screen.queryByText(/Scanner: tech_scout/i)).toBeNull();
   });
 });

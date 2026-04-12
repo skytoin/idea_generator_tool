@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { FrameOutput } from '../../lib/types/frame-output';
+import { ScannerReportView } from './scanner-report-view';
 
 type Source = 'stated' | 'inferred' | 'assumed';
 
@@ -273,8 +274,9 @@ function CostSection({ output }: { output: FrameOutput }): React.ReactElement {
  * Pure presentational view for a FrameOutput. Displays the run header,
  * profile table with confidence badges, the verbatim additional_context
  * block, the narrative prose, each scanner directive (including scanner-
- * specific fields), a collapsible trace table grouped by field, and the
- * USD cost. Stateless and does no fetching — the parent page orchestrates
+ * specific fields), a collapsible trace table grouped by field, the USD
+ * cost, and — when Tech Scout ran — the ScannerReportView inline below
+ * the cost. Stateless and does no fetching; the parent page orchestrates
  * API calls and passes results in as props.
  */
 export function FrameDebugView({ output, error }: FrameDebugViewProps): React.ReactElement {
@@ -297,6 +299,9 @@ export function FrameDebugView({ output, error }: FrameDebugViewProps): React.Re
       <DirectivesPanel output={output} />
       <TraceSection output={output} />
       <CostSection output={output} />
+      {output.scanners?.tech_scout && (
+        <ScannerReportView report={output.scanners.tech_scout} />
+      )}
     </div>
   );
 }

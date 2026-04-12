@@ -216,6 +216,55 @@ describe('buildDirectivesPrompt — trace and prompt content', () => {
     expect(system).toContain('<founder_notes>');
     expect(system.toLowerCase()).toContain('untrusted');
   });
+
+  it('system prompt mandates backward-looking timeframe format', async () => {
+    // Regression test for the "timeframe: next 6 months" bug: the LLM
+    // was writing forward-tense timeframes which fell through to epoch
+    // in the timeframe parser. The prompt now forbids this explicitly.
+    const profile = await buildProfile(carol, 'carol-hash');
+    const { system } = buildDirectivesPrompt(
+      profile,
+      'prose',
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    expect(system).toMatch(/TIMEFRAME FORMAT/i);
+    expect(system).toContain('last N');
+    expect(system).toMatch(/never.*next/i);
+    expect(system).toMatch(/historical/i);
+  });
+
+  it('system prompt instructs including all currently-implemented target_sources', async () => {
+    // Regression test for the "target_sources omits hn" bug: the LLM
+    // was picking arbitrary subsets like ["arxiv","github","producthunt"]
+    // and skipping HN. The prompt now explicitly says "include all by
+    // default" and lists the implemented sources.
+    const profile = await buildProfile(carol, 'carol-hash');
+    const { system } = buildDirectivesPrompt(
+      profile,
+      'prose',
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    expect(system).toMatch(/TARGET_SOURCES/i);
+    expect(system).toContain('"hn"');
+    expect(system).toContain('"arxiv"');
+    expect(system).toContain('"github"');
+    expect(system).toMatch(/include all/i);
+  });
+
+  it('system prompt includes acronym-preservation rule with MCP example', async () => {
+    const profile = await buildProfile(carol, 'carol-hash');
+    const { system } = buildDirectivesPrompt(
+      profile,
+      'prose',
+      'refine',
+      carol.existing_idea ?? null,
+    );
+    expect(system.toUpperCase()).toContain('ACRONYM');
+    expect(system).toMatch(/preserve the acronym verbatim/i);
+    expect(system).toContain('MCP');
+  });
 });
 
 describe('generateDirectives — end to end', () => {

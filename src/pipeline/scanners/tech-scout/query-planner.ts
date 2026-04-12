@@ -28,14 +28,30 @@ export type PlannerOptions = {
 };
 
 /**
- * Parse a natural-language timeframe ("last 6 months", "last 30 days")
- * into an ISO 8601 date cutoff relative to `now`. Unparseable strings
- * fall back to the Unix epoch so downstream filters treat them as
- * unlimited.
+ * Parse a natural-language timeframe into an ISO 8601 date cutoff relative
+ * to `now`. Accepts a wide variety of directional prefixes (last/next/past)
+ * AND bare counts because scanners always look backward in time regardless
+ * of whether the directives LLM wrote "last 6 months", "next 6 months" (a
+ * common LLM hallucination — future tense for a backward-looking scanner),
+ * "past 6 months", or just "6 months". All of these mean "6 months before
+ * now" for our purposes.
+ *
+ * Examples of parseable inputs:
+ *   "last 6 months", "next 6 months", "past 6 months", "6 months"
+ *   "last 30 days", "30 days", "next 2 years"
+ *   "last month" (count defaults to 1), "week", "year"
+ *
+ * Unparseable strings (empty, "forever", gibberish) fall back to the Unix
+ * epoch so downstream filters treat them as "no time bound". A count of 0
+ * with a unit (e.g., "last 0 days") resolves to `now` since subtracting
+ * zero units leaves the date unchanged — documenting that edge as a no-op
+ * rather than a fall-through to epoch.
  */
 export function parseTimeframeToIso(timeframe: string, now: Date): string {
   const s = timeframe.toLowerCase().trim();
-  const match = s.match(/^last\s+(\d+)?\s*(day|week|month|year)s?$/);
+  const match = s.match(
+    /^(?:last|next|past)?\s*(\d+)?\s*(day|week|month|year)s?$/,
+  );
   if (!match) return new Date(0).toISOString();
   const count = match[1] ? parseInt(match[1], 10) : 1;
   const unit = match[2];
@@ -67,6 +83,66 @@ function filterExcludes(
 }
 
 /**
+ * Umbrella technical terms that match millions of unrelated items. When
+ * these appear among expanded_keywords we move them to the END of the list
+ * so source adapters (which take `expanded_keywords.slice(0, N)`) hit more
+ * specific terms first. This is a defense against LLM responses that list
+ * generics first despite the prompt asking for specificity.
+ */
+const GENERIC_KEYWORDS: ReadonlySet<string> = new Set([
+  'ai',
+  'ml',
+  'machine learning',
+  'data science',
+  'deep learning',
+  'python',
+  'javascript',
+  'typescript',
+  'rust',
+  'go',
+  'java',
+  'saas',
+  'software',
+  'software as a service',
+  'software development',
+  'programming',
+  'coding',
+  'startup',
+  'business',
+  'tech',
+  'technology',
+  'cloud',
+  'cloud computing',
+  'analytics',
+  'data analytics',
+  'web',
+  'mobile',
+  'app',
+  'backend',
+  'frontend',
+  'fullstack',
+  'devops',
+  'automation',
+  'platform',
+]);
+
+/**
+ * Re-sort expanded_keywords so generic umbrella terms sink to the end of
+ * the list. The relative order of specific terms is preserved, as is the
+ * relative order of generics. This runs after the LLM response because
+ * models frequently list generics first despite prompt instructions.
+ */
+function demoteGenericKeywords(response: ExpansionResponse): ExpansionResponse {
+  const specific: string[] = [];
+  const generic: string[] = [];
+  for (const kw of response.expanded_keywords) {
+    if (GENERIC_KEYWORDS.has(kw.toLowerCase())) generic.push(kw);
+    else specific.push(kw);
+  }
+  return { ...response, expanded_keywords: [...specific, ...generic] };
+}
+
+/**
  * Build an ExpandedQueryPlan from the directive + profile via one
  * gpt-4o LLM call. Enforces exclude-list hygiene post-response. Returns
  * err on LLM failure or schema mismatch; never throws.
@@ -85,11 +161,12 @@ export async function planQueries(
       prompt: buildExpansionUserPrompt(directive, profile),
     });
     const cleaned = filterExcludes(object, directive.exclude);
+    const reordered = demoteGenericKeywords(cleaned);
     return ok({
-      expanded_keywords: cleaned.expanded_keywords,
-      arxiv_categories: cleaned.arxiv_categories,
-      github_languages: cleaned.github_languages,
-      domain_tags: cleaned.domain_tags,
+      expanded_keywords: reordered.expanded_keywords,
+      arxiv_categories: reordered.arxiv_categories,
+      github_languages: reordered.github_languages,
+      domain_tags: reordered.domain_tags,
       timeframe_iso: parseTimeframeToIso(directive.timeframe, clock()),
     });
   } catch (e) {

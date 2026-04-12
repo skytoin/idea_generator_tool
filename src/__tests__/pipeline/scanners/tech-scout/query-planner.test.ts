@@ -200,6 +200,74 @@ describe('parseTimeframeToIso — edge cases', () => {
     const iso = parseTimeframeToIso('last time I checked', NOW);
     expect(iso).toBe(new Date(0).toISOString());
   });
+
+  // --- regression tests for the LLM "next 6 months" hallucination bug ---
+
+  it('parses "next 6 months" as 6 months back (forward-tense LLM hallucination)', () => {
+    // Real directives-LLM output observed in the wild said "next 6 months"
+    // even though the scanner looks backward in time. The parser treats
+    // "next N" the same as "last N" so the pipeline doesn't fall through
+    // to epoch and return ancient content.
+    const iso = parseTimeframeToIso('next 6 months', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBeGreaterThanOrEqual(5);
+    expect(diff).toBeLessThanOrEqual(6);
+  });
+
+  it('parses "past 6 months" same as "last 6 months"', () => {
+    const iso = parseTimeframeToIso('past 6 months', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBeGreaterThanOrEqual(5);
+    expect(diff).toBeLessThanOrEqual(6);
+  });
+
+  it('parses bare "6 months" (no directional prefix) same as "last 6 months"', () => {
+    const iso = parseTimeframeToIso('6 months', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBeGreaterThanOrEqual(5);
+    expect(diff).toBeLessThanOrEqual(6);
+  });
+
+  it('parses "next 30 days" as 30 days back', () => {
+    const iso = parseTimeframeToIso('next 30 days', NOW);
+    const diffDays = Math.round((NOW.getTime() - new Date(iso).getTime()) / 86_400_000);
+    expect(diffDays).toBe(30);
+  });
+
+  it('parses "past 2 years" as 2 years back', () => {
+    const iso = parseTimeframeToIso('past 2 years', NOW);
+    const d = new Date(iso);
+    expect(NOW.getUTCFullYear() - d.getUTCFullYear()).toBe(2);
+  });
+
+  it('parses "next month" (no count, count defaults to 1) as 1 month back', () => {
+    const iso = parseTimeframeToIso('next month', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBe(1);
+  });
+
+  it('parses bare "week" (no count, no prefix) as 1 week back', () => {
+    const iso = parseTimeframeToIso('week', NOW);
+    const diffDays = Math.round((NOW.getTime() - new Date(iso).getTime()) / 86_400_000);
+    expect(diffDays).toBe(7);
+  });
+
+  it('still returns epoch for "next 6 things" (unrecognized unit)', () => {
+    const iso = parseTimeframeToIso('next 6 things', NOW);
+    expect(iso).toBe(new Date(0).toISOString());
+  });
 });
 
 describe('planQueries — timeframe integration', () => {
@@ -287,5 +355,97 @@ describe('planQueries — exclude hygiene', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.expanded_keywords).not.toContain('crypto');
+  });
+});
+
+describe('planQueries — generic keyword demotion', () => {
+  afterEach(() => resetOpenAIMock());
+
+  it('moves generic umbrella terms to the END of expanded_keywords', async () => {
+    // LLM returned generics first (the observed real-world behavior).
+    // The post-filter should put specific terms at the front so HN/arxiv/
+    // GitHub adapters that take slice(0, 3) hit meaningful queries.
+    setOpenAIResponse('tsp-generic', {
+      content: buildExpansionContent({
+        expanded_keywords: [
+          'machine learning', // generic, should be demoted
+          'data science', // generic
+          'python', // generic
+          'retrieval augmented generation', // specific, should rise
+          'vector database', // specific, should rise
+          'agentic pipelines', // specific, should rise
+        ],
+      }),
+    });
+    const result = await planQueries(buildDirective(), buildValidProfile(), {
+      scenario: 'tsp-generic',
+      clock: FIXED_CLOCK,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const first3 = result.value.expanded_keywords.slice(0, 3);
+    expect(first3).toContain('retrieval augmented generation');
+    expect(first3).toContain('vector database');
+    expect(first3).toContain('agentic pipelines');
+    // Generics must NOT be in the first 3 because adapters take slice(0, 3)
+    expect(first3).not.toContain('machine learning');
+    expect(first3).not.toContain('data science');
+    expect(first3).not.toContain('python');
+  });
+
+  it('preserves order of specific terms when demoting generics', async () => {
+    setOpenAIResponse('tsp-order', {
+      content: buildExpansionContent({
+        expanded_keywords: ['ai', 'fraud detection', 'saas', 'anomaly ml'],
+      }),
+    });
+    const result = await planQueries(buildDirective(), buildValidProfile(), {
+      scenario: 'tsp-order',
+      clock: FIXED_CLOCK,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const kws = result.value.expanded_keywords;
+    // Order should be: specific (preserved) + generic (preserved)
+    expect(kws).toEqual(['fraud detection', 'anomaly ml', 'ai', 'saas']);
+  });
+
+  it('leaves an all-specific keyword list alone', async () => {
+    setOpenAIResponse('tsp-all-specific', {
+      content: buildExpansionContent({
+        expanded_keywords: ['fraud detection', 'anomaly detection', 'risk scoring'],
+      }),
+    });
+    const result = await planQueries(buildDirective(), buildValidProfile(), {
+      scenario: 'tsp-all-specific',
+      clock: FIXED_CLOCK,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.expanded_keywords).toEqual([
+      'fraud detection',
+      'anomaly detection',
+      'risk scoring',
+    ]);
+  });
+
+  it('demotes generics case-insensitively (SaaS, PYTHON, Machine Learning)', async () => {
+    setOpenAIResponse('tsp-case-demote', {
+      content: buildExpansionContent({
+        expanded_keywords: [
+          'SaaS',
+          'PYTHON',
+          'Machine Learning',
+          'vector database',
+        ],
+      }),
+    });
+    const result = await planQueries(buildDirective(), buildValidProfile(), {
+      scenario: 'tsp-case-demote',
+      clock: FIXED_CLOCK,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.expanded_keywords[0]).toBe('vector database');
   });
 });

@@ -9,6 +9,7 @@ import { InMemoryKVStore } from '../../../../lib/utils/kv-store';
 const kv = new InMemoryKVStore();
 
 type Scenarios = NonNullable<FrameDeps['scenarios']>;
+type ScannerScenarios = NonNullable<FrameDeps['scannerScenarios']>;
 
 /**
  * Parse the body of a request as JSON, returning undefined on failure.
@@ -40,6 +41,35 @@ function readTestScenarios(request: Request): Scenarios | undefined {
   if (!header) return undefined;
   try {
     return JSON.parse(header) as Scenarios;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Inspect the x-run-tech-scout header and return true iff it is set
+ * to a truthy value ('1' or 'true', case-insensitive). Any other
+ * value — including absent — leaves Tech Scout off.
+ */
+function readRunTechScout(request: Request): boolean {
+  const header = request.headers.get('x-run-tech-scout');
+  if (!header) return false;
+  const normalized = header.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true';
+}
+
+/**
+ * Decode the x-test-scanner-scenarios header into a scannerScenarios
+ * map. Invalid JSON silently falls back to undefined so the scanner
+ * just uses its default fixture routing.
+ */
+function readScannerScenarios(
+  request: Request,
+): ScannerScenarios | undefined {
+  const header = request.headers.get('x-test-scanner-scenarios');
+  if (!header) return undefined;
+  try {
+    return JSON.parse(header) as ScannerScenarios;
   } catch {
     return undefined;
   }
@@ -79,9 +109,12 @@ function errorResponse(frameError: FrameError): Response {
 
 /**
  * POST /api/frame/extract — run the Frame layer on a FrameInput body and
- * return the resulting FrameOutput. Recognized test-only headers:
- *   x-test-scenarios  JSON like {extract, narrative, directives} routed to
- *                      the MSW mock. Production clients never send this.
+ * return the resulting FrameOutput. Recognized headers:
+ *   x-run-tech-scout            '1' or 'true' to additionally run Tech Scout.
+ *   x-test-scenarios            JSON {extract, narrative, directives} for Layer 1
+ *                                MSW routing. Production clients never send this.
+ *   x-test-scanner-scenarios    JSON {expansion, enrichment} for Tech Scout MSW
+ *                                routing. Test-only; invalid JSON is ignored.
  */
 export async function POST(request: Request): Promise<Response> {
   const body = await parseJsonBody(request);
@@ -94,6 +127,8 @@ export async function POST(request: Request): Promise<Response> {
     clock: () => new Date(),
     kv,
     scenarios: readTestScenarios(request),
+    runTechScout: readRunTechScout(request),
+    scannerScenarios: readScannerScenarios(request),
   };
   const result = await runFrame(validation.input, deps);
   if (!result.ok) {

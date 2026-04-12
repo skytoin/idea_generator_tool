@@ -1,6 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { POST, __resetKVForTest } from '../../app/api/frame/extract/route';
 import { setOpenAIResponse, resetOpenAIMock } from '../mocks/openai-mock';
+import {
+  setHnResponse,
+  setGithubResponse,
+  resetScannerMocks,
+} from '../mocks/scanner-mocks';
 import { FRAME_OUTPUT_SCHEMA } from '../../lib/types/frame-output';
 import type { ScannerDirectives } from '../../lib/types/scanner-directives';
 import aliceRaw from '../pipeline/frame/fixtures/alice-minimum.json';
@@ -192,4 +197,172 @@ describe('POST /api/frame/extract', () => {
     );
     expect(second.status).toBe(200);
   });
+});
+
+/** Build a minimal expansion JSON body for the scanner expansion call. */
+function buildExpansionJson(): string {
+  return JSON.stringify({
+    expanded_keywords: ['react'],
+    arxiv_categories: [],
+    github_languages: ['typescript'],
+    domain_tags: [],
+  });
+}
+
+/** Build a minimal enrichment JSON body for N signals. */
+function buildEnrichmentJson(count: number): string {
+  return JSON.stringify({
+    signals: Array.from({ length: count }, (_, i) => ({
+      index: i,
+      title: `Enriched ${i}`,
+      snippet: `Enriched snippet ${i}`,
+      score: { novelty: 7, specificity: 8, recency: 9 },
+      category: 'tech_capability',
+    })),
+  });
+}
+
+/** Minimal HN hit payload for test MSW registration. */
+function buildHnHit() {
+  return {
+    objectID: '100',
+    title: 'ML fraud tool',
+    url: 'https://example.com/hn-post',
+    author: 'alice',
+    points: 150,
+    num_comments: 42,
+    created_at: '2026-03-14T12:00:00.000Z',
+    created_at_i: 1742558400,
+    _tags: ['story'],
+  };
+}
+
+/** Register every LLM + source scenario the tech_scout path needs. */
+function registerAllTechScoutScenarios(prefix: string): void {
+  registerAll(prefix);
+  setOpenAIResponse(`${prefix}-expansion`, { content: buildExpansionJson() });
+  setOpenAIResponse(`${prefix}-enrichment`, { content: buildEnrichmentJson(1) });
+  setHnResponse(`${prefix}-hn`, { hits: [buildHnHit()] });
+  setGithubResponse(`${prefix}-github`, {
+    total_count: 0,
+    incomplete_results: false,
+    items: [],
+  });
+}
+
+describe('POST /api/frame/extract — Tech Scout passthrough', () => {
+  beforeEach(() => {
+    __resetKVForTest();
+  });
+  afterEach(() => {
+    resetOpenAIMock();
+    resetScannerMocks();
+    vi.unstubAllEnvs();
+    __resetKVForTest();
+  });
+
+  it('returns scanners field when x-run-tech-scout=1', async () => {
+    registerAllTechScoutScenarios('hdr1');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_HN', 'hdr1-hn');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_GITHUB', 'hdr1-github');
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_test');
+    const req = new Request('http://test/api/frame/extract', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-scenarios': JSON.stringify({
+          extract: 'hdr1-extract',
+          narrative: 'hdr1-narrative',
+          directives: 'hdr1-directives',
+        }),
+        'x-run-tech-scout': '1',
+        'x-test-scanner-scenarios': JSON.stringify({
+          expansion: 'hdr1-expansion',
+          enrichment: 'hdr1-enrichment',
+        }),
+      },
+      body: JSON.stringify(alice),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      scanners?: { tech_scout?: { scanner?: string } };
+    };
+    expect(data.scanners).toBeDefined();
+    expect(data.scanners?.tech_scout).toBeDefined();
+    expect(data.scanners?.tech_scout?.scanner).toBe('tech_scout');
+  }, 20_000);
+
+  it('also accepts "true" as a truthy x-run-tech-scout value', async () => {
+    registerAllTechScoutScenarios('hdr2');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_HN', 'hdr2-hn');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_GITHUB', 'hdr2-github');
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_test');
+    const req = new Request('http://test/api/frame/extract', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-scenarios': JSON.stringify({
+          extract: 'hdr2-extract',
+          narrative: 'hdr2-narrative',
+          directives: 'hdr2-directives',
+        }),
+        'x-run-tech-scout': 'true',
+        'x-test-scanner-scenarios': JSON.stringify({
+          expansion: 'hdr2-expansion',
+          enrichment: 'hdr2-enrichment',
+        }),
+      },
+      body: JSON.stringify(alice),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { scanners?: unknown };
+    expect(data.scanners).toBeDefined();
+  }, 20_000);
+
+  it('omits scanners field when x-run-tech-scout header is absent', async () => {
+    registerAll('hdr3');
+    const req = new Request('http://test/api/frame/extract', {
+      method: 'POST',
+      headers: buildScenarioHeader('hdr3'),
+      body: JSON.stringify(alice),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as { scanners?: unknown };
+    expect(data.scanners).toBeUndefined();
+  });
+
+  it('still runs tech_scout when x-test-scanner-scenarios is invalid JSON', async () => {
+    registerAllTechScoutScenarios('hdr4');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_HN', 'hdr4-hn');
+    vi.stubEnv('TECH_SCOUT_SCENARIO_GITHUB', 'hdr4-github');
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_test');
+    const req = new Request('http://test/api/frame/extract', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-test-scenarios': JSON.stringify({
+          extract: 'hdr4-extract',
+          narrative: 'hdr4-narrative',
+          directives: 'hdr4-directives',
+        }),
+        'x-run-tech-scout': '1',
+        'x-test-scanner-scenarios': '{not-json',
+      },
+      body: JSON.stringify(alice),
+    });
+    const res = await POST(req);
+    // With no scanner scenarios the LLM calls route to the default stub
+    // ('{"ideas":[]}') which fails expansion/enrichment schemas — the
+    // scanner still runs, just falls back to defaults and surfaces
+    // warnings. The response status is still 200 with a scanners field.
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as {
+      scanners?: { tech_scout?: unknown };
+    };
+    expect(data.scanners).toBeDefined();
+    expect(data.scanners?.tech_scout).toBeDefined();
+  }, 20_000);
 });

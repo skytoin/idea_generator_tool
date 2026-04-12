@@ -162,6 +162,18 @@ describe('buildNarrativePrompt — field coverage for narrative consumer', () =>
     expect(system.toLowerCase()).toContain('untrusted');
   });
 
+  it('system prompt includes acronym-preservation rule with MCP example', async () => {
+    // Regression test for the MCP-interpreted-as-Multi-Cloud-Platform bug.
+    // The LLM was expanding "MCP" to "multi-cloud platforms" in narratives,
+    // which misdirected every downstream scanner query. The prompt now
+    // tells the LLM to preserve unknown acronyms verbatim.
+    const profile = await buildAliceProfile();
+    const { system } = buildNarrativePrompt(profile, 'explore', null);
+    expect(system.toUpperCase()).toContain('ACRONYM');
+    expect(system).toMatch(/preserve the acronym verbatim/i);
+    expect(system).toContain('MCP');
+  });
+
   it('required_in_prompt fields appear in the prompt', async () => {
     const profile = await buildCarolProfile();
     const { user, system } = buildNarrativePrompt(

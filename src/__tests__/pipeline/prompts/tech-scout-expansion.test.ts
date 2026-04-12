@@ -198,3 +198,35 @@ describe('buildExpansionUserPrompt', () => {
     expect(user).toContain('(none)');
   });
 });
+
+describe('buildExpansionSystemPrompt — v1.1 quality rules', () => {
+  it('explicitly requires specific-first keyword ordering', () => {
+    const system = buildExpansionSystemPrompt();
+    expect(system).toMatch(/ordering is critical/i);
+    expect(system).toMatch(/most specific.*first/i);
+    expect(system).toMatch(/most generic.*last/i);
+  });
+
+  it('lists generic umbrella terms to avoid at the front', () => {
+    const system = buildExpansionSystemPrompt();
+    // The prompt should name-and-shame common generics so the LLM
+    // recognizes them as patterns to sink, not surface.
+    expect(system).toContain('machine learning');
+    expect(system).toContain('data science');
+    expect(system).toContain('Python');
+    expect(system).toContain('SaaS');
+  });
+
+  it('requires at least 2-3 highly specific terms from the founder profile', () => {
+    const system = buildExpansionSystemPrompt();
+    expect(system).toMatch(/2-3 highly specific terms/i);
+  });
+
+  it('includes acronym disambiguation rule with MCP example', () => {
+    const system = buildExpansionSystemPrompt();
+    expect(system).toMatch(/ACRONYM/i);
+    expect(system).toMatch(/preserve the acronym verbatim/i);
+    expect(system).toContain('MCP');
+    expect(system).toContain('Model Context Protocol');
+  });
+});

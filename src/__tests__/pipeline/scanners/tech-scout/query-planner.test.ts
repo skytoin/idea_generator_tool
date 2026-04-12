@@ -144,6 +144,64 @@ describe('parseTimeframeToIso', () => {
   });
 });
 
+describe('parseTimeframeToIso — edge cases', () => {
+  const NOW = new Date('2026-04-11T12:00:00Z');
+
+  it('returns Unix epoch for empty string timeframe', () => {
+    const iso = parseTimeframeToIso('', NOW);
+    expect(iso).toBe(new Date(0).toISOString());
+  });
+
+  it('returns Unix epoch for whitespace-only timeframe', () => {
+    const iso = parseTimeframeToIso('   \t  ', NOW);
+    expect(iso).toBe(new Date(0).toISOString());
+  });
+
+  it('parses "last 0 days" to exactly now (zero shift)', () => {
+    // "last 0 days" does match the regex (\d+)? → 0, so it parses and
+    // subtracts 0 days from now. Documents that it never crashes and
+    // behaves as a no-op rather than falling through to epoch.
+    const iso = parseTimeframeToIso('last 0 days', NOW);
+    expect(iso).toBe(NOW.toISOString());
+  });
+
+  it('parses "LAST 6 MONTHS" (all uppercase) correctly via toLowerCase', () => {
+    const iso = parseTimeframeToIso('LAST 6 MONTHS', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBeGreaterThanOrEqual(5);
+    expect(diff).toBeLessThanOrEqual(6);
+  });
+
+  it('parses "last 6 MONTHS" (mixed case) same as all-lower', () => {
+    const iso = parseTimeframeToIso('last 6 MONTHS', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBeGreaterThanOrEqual(5);
+    expect(diff).toBeLessThanOrEqual(6);
+  });
+
+  it('tolerates extra leading/trailing whitespace in a valid timeframe', () => {
+    const iso = parseTimeframeToIso('  last 6 months  ', NOW);
+    const d = new Date(iso);
+    const diff =
+      (NOW.getUTCFullYear() - d.getUTCFullYear()) * 12 +
+      (NOW.getUTCMonth() - d.getUTCMonth());
+    expect(diff).toBeGreaterThanOrEqual(5);
+    expect(diff).toBeLessThanOrEqual(6);
+  });
+
+  it('returns Unix epoch for a garbage string that mentions "last"', () => {
+    // "last time I checked" does not match the full regex — falls through.
+    const iso = parseTimeframeToIso('last time I checked', NOW);
+    expect(iso).toBe(new Date(0).toISOString());
+  });
+});
+
 describe('planQueries — timeframe integration', () => {
   afterEach(() => resetOpenAIMock());
 

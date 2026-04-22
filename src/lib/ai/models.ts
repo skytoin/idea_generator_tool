@@ -31,10 +31,10 @@ export const providers = {
  */
 function resolveTechScoutModel() {
   const choice = (process.env.TECH_SCOUT_MODEL ?? '').toLowerCase().trim();
-  if (choice === 'sonnet' || choice === 'claude-sonnet-4-7') {
-    return anthropic('claude-sonnet-4-7');
+  if (choice === 'opus' || choice === 'claude-opus-4-6') {
+    return anthropic('claude-opus-4-6');
   }
-  if (choice === 'claude-sonnet-4-6') {
+  if (choice === 'sonnet' || choice === 'claude-sonnet-4-6') {
     return anthropic('claude-sonnet-4-6');
   }
   return openai('gpt-4o');

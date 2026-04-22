@@ -3,9 +3,12 @@ import { ok, err, type Result } from '../../../lib/utils/result';
 import { models } from '../../../lib/ai/models';
 import type { FounderProfile } from '../../../lib/types/founder-profile';
 import type { ScannerDirectives } from '../../../lib/types/scanner-directives';
+import type { ProblemHunts } from '../../../lib/types/problem-hunt';
+import type { AdjacentWorlds } from '../../../lib/types/adjacent-world';
 import type { ExpandedQueryPlan } from '../types';
 import {
   EXPANSION_RESPONSE_SCHEMA,
+  EXPANSION_WIRE_SCHEMA,
   buildExpansionSystemPrompt,
   buildExpansionUserPrompt,
   type ExpansionResponse,
@@ -25,6 +28,10 @@ export type PlannerOptions = {
   clock?: () => Date;
   /** Scenario marker routed through the MSW OpenAI mock. */
   scenario?: string;
+  /** Problem hunts produced by the skill-remix LLM stage (v2). */
+  problem_hunts?: ProblemHunts;
+  /** Adjacent worlds produced by the adjacent-world LLM stage (v2). */
+  adjacent_worlds?: AdjacentWorlds;
 };
 
 /**
@@ -49,9 +56,7 @@ export type PlannerOptions = {
  */
 export function parseTimeframeToIso(timeframe: string, now: Date): string {
   const s = timeframe.toLowerCase().trim();
-  const match = s.match(
-    /^(?:last|next|past)?\s*(\d+)?\s*(day|week|month|year)s?$/,
-  );
+  const match = s.match(/^(?:last|next|past)?\s*(\d+)?\s*(day|week|month|year)s?$/);
   if (!match) return new Date(0).toISOString();
   const count = match[1] ? parseInt(match[1], 10) : 1;
   const unit = match[2];
@@ -64,21 +69,82 @@ export function parseTimeframeToIso(timeframe: string, now: Date): string {
 }
 
 /**
- * Remove any expanded_keywords that match a directive exclude entry
- * (case-insensitive). Applied after the LLM response because a
- * misbehaving model may echo excluded terms despite the system prompt
- * telling it not to.
+ * Remove any keywords that match a directive exclude entry
+ * (case-insensitive) from ALL per-source keyword lists. Applied after
+ * the LLM response because a misbehaving model may echo excluded terms
+ * despite the system prompt telling it not to.
  */
 function filterExcludes(
   response: ExpansionResponse,
   exclude: readonly string[],
 ): ExpansionResponse {
   const lower = new Set(exclude.map((e) => e.toLowerCase()));
+  const strip = (kws: string[]) => kws.filter((kw) => !lower.has(kw.toLowerCase()));
   return {
     ...response,
-    expanded_keywords: response.expanded_keywords.filter(
-      (kw) => !lower.has(kw.toLowerCase()),
-    ),
+    hn_keywords: strip(response.hn_keywords),
+    arxiv_keywords: strip(response.arxiv_keywords),
+    github_keywords: strip(response.github_keywords),
+  };
+}
+
+/**
+ * An "acronym" for our purposes is a token of 2-6 uppercase letters with
+ * no digits, spaces, or lowercase. Examples: MCP, API, CLI, RAG, LLM,
+ * NLP, BERT. This rules out mixed-case brand names (SaaS, Python) and
+ * long all-caps words like HACKATHON which are rarely real acronyms.
+ */
+const ACRONYM_REGEX = /^[A-Z]{2,6}$/;
+
+/**
+ * True when `kw` looks like an all-uppercase acronym (2-6 letters). The
+ * regex is strict on purpose: mixed-case tokens slip through to normal
+ * keyword handling instead of being force-preserved.
+ */
+function isAcronym(kw: string): boolean {
+  return ACRONYM_REGEX.test(kw.trim());
+}
+
+/**
+ * True when `acronym` appears as a whole-word substring (case-insensitive)
+ * anywhere in the joined keyword haystack. Word boundaries matter:
+ * "adaptive MC models" must NOT match "MCP", since MC ⊊ MCP accidentally.
+ */
+function containsAsWord(haystack: string, acronym: string): boolean {
+  const pattern = new RegExp(`\\b${acronym}\\b`, 'i');
+  return pattern.test(haystack);
+}
+
+/**
+ * Post-LLM guard that force-preserves every profile acronym in the
+ * expansion response. For each directive keyword that looks like an
+ * acronym (2-6 uppercase letters), we check whether it still appears
+ * as a whole word in any of the three per-source lists; if not, we
+ * append it to ALL THREE so the adapters can search for it verbatim.
+ *
+ * Why: on 2026-04-12 the LLM silently drifted `MCP` → "adaptive MC
+ * models" (Monte Carlo, not Model Context Protocol) despite a prompt
+ * rule asking for verbatim preservation. Prompt rules alone are not
+ * reliable — this enforcer makes preservation a hard guarantee.
+ */
+export function enforceAcronymPreservation(
+  response: ExpansionResponse,
+  directiveKeywords: readonly string[],
+): ExpansionResponse {
+  const acronyms = directiveKeywords.map((kw) => kw.trim()).filter(isAcronym);
+  if (acronyms.length === 0) return response;
+  const haystack = [
+    ...response.hn_keywords,
+    ...response.arxiv_keywords,
+    ...response.github_keywords,
+  ].join(' ');
+  const missing = acronyms.filter((ac) => !containsAsWord(haystack, ac));
+  if (missing.length === 0) return response;
+  return {
+    ...response,
+    hn_keywords: [...response.hn_keywords, ...missing],
+    arxiv_keywords: [...response.arxiv_keywords, ...missing],
+    github_keywords: [...response.github_keywords, ...missing],
   };
 }
 
@@ -126,20 +192,31 @@ const GENERIC_KEYWORDS: ReadonlySet<string> = new Set([
   'platform',
 ]);
 
-/**
- * Re-sort expanded_keywords so generic umbrella terms sink to the end of
- * the list. The relative order of specific terms is preserved, as is the
- * relative order of generics. This runs after the LLM response because
- * models frequently list generics first despite prompt instructions.
- */
-function demoteGenericKeywords(response: ExpansionResponse): ExpansionResponse {
+/** Demote generic umbrella terms to the end of a single keyword list. */
+function demoteInList(keywords: string[]): string[] {
   const specific: string[] = [];
   const generic: string[] = [];
-  for (const kw of response.expanded_keywords) {
+  for (const kw of keywords) {
     if (GENERIC_KEYWORDS.has(kw.toLowerCase())) generic.push(kw);
     else specific.push(kw);
   }
-  return { ...response, expanded_keywords: [...specific, ...generic] };
+  return [...specific, ...generic];
+}
+
+/**
+ * Re-sort all per-source keyword lists so generic umbrella terms sink
+ * to the end. The relative order of specific terms is preserved, as is
+ * the relative order of generics. This runs after the LLM response
+ * because models frequently list generics first despite prompt
+ * instructions.
+ */
+function demoteGenericKeywords(response: ExpansionResponse): ExpansionResponse {
+  return {
+    ...response,
+    hn_keywords: demoteInList(response.hn_keywords),
+    arxiv_keywords: demoteInList(response.arxiv_keywords),
+    github_keywords: demoteInList(response.github_keywords),
+  };
 }
 
 /**
@@ -156,14 +233,30 @@ export async function planQueries(
   try {
     const { object } = await generateObject({
       model: models.tech_scout,
-      schema: EXPANSION_RESPONSE_SCHEMA,
+      schema: EXPANSION_WIRE_SCHEMA,
       system: buildExpansionSystemPrompt(options.scenario),
-      prompt: buildExpansionUserPrompt(directive, profile),
+      prompt: buildExpansionUserPrompt(directive, profile, {
+        problem_hunts: options.problem_hunts,
+        adjacent_worlds: options.adjacent_worlds,
+      }),
     });
-    const cleaned = filterExcludes(object, directive.exclude);
-    const reordered = demoteGenericKeywords(cleaned);
+    // Post-parse strict validation. Wire schema is loose so Anthropic
+    // accepts it; strict schema re-applies the 4-8 items per list and
+    // non-empty string bounds at the Result boundary.
+    const validated = EXPANSION_RESPONSE_SCHEMA.safeParse(object);
+    if (!validated.success) {
+      return err({
+        kind: 'schema_invalid',
+        message: validated.error.message,
+      });
+    }
+    const cleaned = filterExcludes(validated.data, directive.exclude);
+    const acronymPreserved = enforceAcronymPreservation(cleaned, directive.keywords);
+    const reordered = demoteGenericKeywords(acronymPreserved);
     return ok({
-      expanded_keywords: reordered.expanded_keywords,
+      hn_keywords: reordered.hn_keywords,
+      arxiv_keywords: reordered.arxiv_keywords,
+      github_keywords: reordered.github_keywords,
       arxiv_categories: reordered.arxiv_categories,
       github_languages: reordered.github_languages,
       domain_tags: reordered.domain_tags,

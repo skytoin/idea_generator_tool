@@ -1,9 +1,6 @@
 import { createHash } from 'node:crypto';
 import { ok, err, type Result } from '../../lib/utils/result';
-import {
-  FRAME_INPUT_SCHEMA,
-  type FrameInput,
-} from '../../lib/types/frame-input';
+import { FRAME_INPUT_SCHEMA, type FrameInput } from '../../lib/types/frame-input';
 import type { FrameOutput } from '../../lib/types/frame-output';
 import type { KVStore } from '../../lib/utils/kv-store';
 import type { FounderProfile } from '../../lib/types/founder-profile';
@@ -11,14 +8,8 @@ import type { ScannerDirectives } from '../../lib/types/scanner-directives';
 import type { ScannerReport } from '../../lib/types/scanner-report';
 import { extractProfile } from '../frame/extract-profile';
 import { applyAssumptions } from '../frame/apply-assumptions';
-import {
-  generateNarrative,
-  type NarrativeResult,
-} from '../frame/generate-narrative';
-import {
-  generateDirectives,
-  type DirectivesResult,
-} from '../frame/generate-directives';
+import { generateNarrative, type NarrativeResult } from '../frame/generate-narrative';
+import { generateDirectives, type DirectivesResult } from '../frame/generate-directives';
 import { runTechScout } from '../scanners/tech-scout';
 import { logger } from '../../lib/utils/logger';
 
@@ -39,6 +30,20 @@ export type FrameDeps = {
   scannerScenarios?: {
     expansion?: string;
     enrichment?: string;
+    skill_remix?: string;
+    adjacent_worlds?: string;
+    refine?: string;
+  };
+  /**
+   * Per-scanner v2 feature flags. Defaults to all-off; the API route
+   * reads these from request headers and passes them through to
+   * runTechScout. Turning any flag on adds one or two LLM calls to
+   * the run, all of which degrade gracefully on failure.
+   */
+  scannerFeatures?: {
+    skill_remix?: boolean;
+    adjacent_worlds?: boolean;
+    two_pass?: boolean;
   };
 };
 
@@ -161,10 +166,7 @@ function assembleOutput(
  * itself throws (which its Scanner contract forbids). Used as the
  * graceful-degradation return value by runTechScoutSafely.
  */
-function buildScannerCrashReport(
-  message: string,
-  generatedAt: string,
-): ScannerReport {
+function buildScannerCrashReport(message: string, generatedAt: string): ScannerReport {
   return {
     scanner: 'tech_scout',
     status: 'failed',
@@ -198,6 +200,7 @@ async function runTechScoutSafely(
     return await runTechScout(directive, profile, narrativeProse, {
       clock: deps.clock,
       scenarios: deps.scannerScenarios,
+      features: deps.scannerFeatures,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
@@ -235,13 +238,10 @@ async function runAllLLMPhases(
   mode: Mode,
   existingIdea: string | null,
   deps: FrameDeps,
-): Promise<Result<{ narrative: NarrativeResult; directives: DirectivesResult }, FrameError>> {
-  const { narrative, directives } = await runLLMPhases(
-    profile,
-    mode,
-    existingIdea,
-    deps,
-  );
+): Promise<
+  Result<{ narrative: NarrativeResult; directives: DirectivesResult }, FrameError>
+> {
+  const { narrative, directives } = await runLLMPhases(profile, mode, existingIdea, deps);
   if (!narrative.ok) {
     return err({ kind: 'narrative_failed', message: narrative.error.message });
   }

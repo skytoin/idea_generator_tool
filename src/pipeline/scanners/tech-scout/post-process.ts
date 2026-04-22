@@ -1,12 +1,13 @@
 import type { Signal } from '../../../lib/types/signal';
 
 /**
- * Composite signal score used by dedupe and ranking. Adds the three
- * score axes so a single number captures overall relevance without
- * biasing toward any single dimension.
+ * Composite signal score used by dedupe and ranking. Relevance is
+ * weighted 2× because a highly relevant signal with moderate novelty
+ * is more useful to the founder than a very novel but irrelevant one.
+ * Max possible: 20 (relevance) + 10 + 10 + 10 = 50.
  */
 function compositeScore(s: Signal): number {
-  return s.score.novelty + s.score.specificity + s.score.recency;
+  return s.score.relevance * 2 + s.score.novelty + s.score.specificity + s.score.recency;
 }
 
 /**
@@ -31,10 +32,7 @@ export function dedupeSignals(signals: Signal[]): Signal[] {
  * (case-insensitive substring match). The empty-exclude fast path
  * returns the input reference so callers can skip work cheaply.
  */
-export function filterExcluded(
-  signals: Signal[],
-  exclude: readonly string[],
-): Signal[] {
+export function filterExcluded(signals: Signal[], exclude: readonly string[]): Signal[] {
   if (exclude.length === 0) return signals;
   const lower = exclude.map((e) => e.toLowerCase());
   return signals.filter((s) => !matchesAnyExclude(s, lower));
@@ -62,6 +60,41 @@ export function keepTop(signals: Signal[], n: number): Signal[] {
 }
 
 /**
+ * Drop signals whose `date` is strictly before `cutoffIso`. Signals
+ * with `date: null` are KEPT because we cannot prove they are stale
+ * (some adapters normalize dateless items rather than dropping them).
+ * An unparseable cutoff or epoch cutoff is a no-op. This enforces the
+ * directive.timeframe hard floor on arxiv papers that would otherwise
+ * leak through keepTop purely on composite score.
+ */
+export function filterByTimeframe(signals: Signal[], cutoffIso: string): Signal[] {
+  const cutoff = Date.parse(cutoffIso);
+  if (!Number.isFinite(cutoff) || cutoff <= 0) return signals;
+  return signals.filter((s) => {
+    if (s.date === null) return true;
+    const ts = Date.parse(s.date);
+    if (!Number.isFinite(ts)) return true;
+    return ts >= cutoff;
+  });
+}
+
+/**
+ * Quality floor for enriched signals. Drops anything whose individual
+ * `relevance` or `recency` score (1–10 scale) is below the supplied
+ * minimums. Applied AFTER enrichment so it filters on real LLM-scored
+ * numbers, not the default 5/5/5/5 pre-enrichment placeholder. Both
+ * thresholds are inclusive — a score equal to the floor passes.
+ */
+export function filterByMinScore(
+  signals: Signal[],
+  opts: { minRelevance: number; minRecency: number },
+): Signal[] {
+  return signals.filter(
+    (s) => s.score.relevance >= opts.minRelevance && s.score.recency >= opts.minRecency,
+  );
+}
+
+/**
  * Take up to `perSourceCap` signals from each unique source, preserving
  * the original order within each source. This is a fairness mechanism
  * applied BEFORE enrichment so the enricher sees a balanced sample from
@@ -74,10 +107,7 @@ export function keepTop(signals: Signal[], n: number): Signal[] {
  * Output order: first `perSourceCap` from HN, then first `perSourceCap`
  * from arxiv, then first `perSourceCap` from GitHub.
  */
-export function interleaveBySource(
-  signals: Signal[],
-  perSourceCap: number,
-): Signal[] {
+export function interleaveBySource(signals: Signal[], perSourceCap: number): Signal[] {
   if (perSourceCap <= 0) return [];
   const bySource = new Map<string, Signal[]>();
   for (const s of signals) {

@@ -4,6 +4,7 @@ import type { Signal } from '../../../lib/types/signal';
 import { estimateCost } from '../../frame/estimate-cost';
 import {
   ENRICHMENT_RESPONSE_SCHEMA,
+  ENRICHMENT_WIRE_SCHEMA,
   buildEnrichmentSystemPrompt,
   buildEnrichmentUserPrompt,
   type EnrichmentResponse,
@@ -14,6 +15,8 @@ export type EnricherOptions = {
   scenario?: string;
   /** Cap on number of signals sent to the LLM (default 40). */
   topN?: number;
+  /** Brief founder goal summary for relevance scoring. */
+  founderContext?: string;
 };
 
 export type EnricherResult = {
@@ -22,7 +25,7 @@ export type EnricherResult = {
   warnings: string[];
 };
 
-const FALLBACK_SCORE = { novelty: 5, specificity: 5, recency: 5 } as const;
+const FALLBACK_SCORE = { novelty: 5, specificity: 5, recency: 5, relevance: 5 } as const;
 const DEFAULT_TOP_N = 40;
 
 /**
@@ -43,11 +46,25 @@ export async function enrichSignals(
   try {
     const { object, usage } = await generateObject({
       model: models.tech_scout,
-      schema: ENRICHMENT_RESPONSE_SCHEMA,
-      system: buildEnrichmentSystemPrompt(options.scenario),
+      schema: ENRICHMENT_WIRE_SCHEMA,
+      system: buildEnrichmentSystemPrompt(options.scenario, options.founderContext),
       prompt: buildEnrichmentUserPrompt(subset.map(toEnrichmentInput)),
     });
-    return mergeEnrichment(subset, object, usage);
+    // Post-parse strict validation. The wire schema is loose so that
+    // Anthropic's tool_use (which rejects `minimum`/`maximum` on
+    // integers and has narrower constraint support than OpenAI's
+    // response_format) accepts it. After the model returns, we
+    // re-validate against ENRICHMENT_RESPONSE_SCHEMA to re-apply
+    // score bounds, integer index, and non-empty title — the same
+    // strictness the old code had at the generateObject boundary.
+    const validated = ENRICHMENT_RESPONSE_SCHEMA.safeParse(object);
+    if (!validated.success) {
+      return buildFallback(
+        subset,
+        new Error(`enrichment_schema_invalid: ${validated.error.message}`),
+      );
+    }
+    return mergeEnrichment(subset, validated.data, usage);
   } catch (e) {
     return buildFallback(subset, e);
   }
@@ -92,9 +109,7 @@ function mergeEnrichment(
 ): EnricherResult {
   const byIndex = new Map(response.signals.map((s) => [s.index, s]));
   const warnings: string[] = [];
-  const enriched = subset.map((orig, i) =>
-    mergeOne(orig, byIndex.get(i), i, warnings),
-  );
+  const enriched = subset.map((orig, i) => mergeOne(orig, byIndex.get(i), i, warnings));
   return { signals: enriched, cost_usd: estimateCost(usage), warnings };
 }
 

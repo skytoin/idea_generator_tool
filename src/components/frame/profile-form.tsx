@@ -4,7 +4,11 @@ import { useEffect, useState, type ReactElement } from 'react';
 import type { FrameInput } from '../../lib/types/frame-input';
 import type { FrameOutput } from '../../lib/types/frame-output';
 import { saveDraft, loadDraft } from '../../lib/frame/client-state';
-import { QUESTIONS, type Question, type QuestionTarget } from '../../pipeline/frame/questions';
+import {
+  QUESTIONS,
+  type Question,
+  type QuestionTarget,
+} from '../../pipeline/frame/questions';
 import { ModeSelector, type Mode } from './mode-selector';
 import { FieldWithHelp } from './field-with-help';
 import { AdditionalContext } from './additional-context';
@@ -14,6 +18,25 @@ import { ChatAssistDrawer } from './chat-assist-drawer';
 import { FrameDebugView } from '../debug/frame-debug-view';
 
 type FormState = Partial<FrameInput>;
+
+/**
+ * Tech Scout v2 feature flags exposed to the user as checkboxes above
+ * the Submit button. All default to OFF so the production experience
+ * is unchanged unless the founder opts in. Flags are sent to the API
+ * route as the `x-scanner-features` header, which the route decodes
+ * into FrameDeps.scannerFeatures and threads through to runTechScout.
+ */
+type FeatureFlags = {
+  skill_remix: boolean;
+  adjacent_worlds: boolean;
+  two_pass: boolean;
+};
+
+const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  skill_remix: false,
+  adjacent_worlds: false,
+  two_pass: false,
+};
 
 type SubmitState =
   | { kind: 'idle' }
@@ -55,7 +78,11 @@ function useDraftSave(input: FormState): void {
 
 /** Read the value for a given question from form state by its profileField. */
 function readValue(input: FormState, question: Question): unknown {
-  const field = question.profileField as keyof FormState | 'mode' | 'existing_idea' | 'additional_context';
+  const field = question.profileField as
+    | keyof FormState
+    | 'mode'
+    | 'existing_idea'
+    | 'additional_context';
   if (field === 'mode') return input.mode;
   if (field === 'existing_idea') return input.existing_idea;
   if (field === 'additional_context') return input.additional_context;
@@ -63,11 +90,7 @@ function readValue(input: FormState, question: Question): unknown {
 }
 
 /** Write a new value for a given question into form state by its profileField. */
-function writeValue(
-  input: FormState,
-  question: Question,
-  value: unknown,
-): FormState {
+function writeValue(input: FormState, question: Question, value: unknown): FormState {
   const field = question.profileField as QuestionTarget;
   return { ...input, [field]: value };
 }
@@ -96,7 +119,12 @@ type GroupProps = {
 };
 
 /** Render a slice of QUESTIONS filtered by a given id set. */
-function QuestionGroup({ ids, input, onChange, onRequestHelp }: GroupProps): ReactElement {
+function QuestionGroup({
+  ids,
+  input,
+  onChange,
+  onRequestHelp,
+}: GroupProps): ReactElement {
   return (
     <div>
       {QUESTIONS.filter((q) => ids.has(q.id)).map((q) => (
@@ -161,17 +189,32 @@ async function readErrorDetails(response: Response): Promise<string | undefined>
 /**
  * POST current form state to /api/frame/extract and return the new
  * SubmitState. Always sets `x-run-tech-scout: 1` so the Frame pipeline
- * runs the Layer 2 Tech Scout scanner on every submit — the debug view
- * then surfaces the scanner report to the founder.
+ * runs the Layer 2 Tech Scout scanner on every submit. When any v2
+ * feature flag is enabled, also emits an `x-scanner-features` header
+ * the API route decodes into FrameDeps.scannerFeatures — the scanner
+ * then fires skill_remix / adjacent_worlds / two_pass accordingly and
+ * the returned report's `v2_features_meta` block shows the result of
+ * each stage so the user can see what actually ran.
  */
-async function submitForm(input: FormState): Promise<SubmitState> {
+async function submitForm(
+  input: FormState,
+  features: FeatureFlags,
+): Promise<SubmitState> {
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-run-tech-scout': '1',
+    };
+    if (features.skill_remix || features.adjacent_worlds || features.two_pass) {
+      headers['x-scanner-features'] = JSON.stringify({
+        skill_remix: features.skill_remix,
+        adjacent_worlds: features.adjacent_worlds,
+        two_pass: features.two_pass,
+      });
+    }
     const response = await fetch('/api/frame/extract', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-run-tech-scout': '1',
-      },
+      headers,
       body: JSON.stringify(input),
     });
     if (!response.ok) {
@@ -187,6 +230,74 @@ async function submitForm(input: FormState): Promise<SubmitState> {
       details: e instanceof Error ? e.message : undefined,
     };
   }
+}
+
+/**
+ * Tech Scout feature-flag checkboxes. Rendered above the Submit button
+ * so the founder can opt in to the v2 pipeline stages before
+ * submitting. All flags default to off — the user must actively turn
+ * each one on. The label text for each flag doubles as the on-hover
+ * hint so the component stays compact.
+ */
+function FeatureFlagsPanel({
+  flags,
+  onChange,
+}: {
+  flags: FeatureFlags;
+  onChange: (next: FeatureFlags) => void;
+}): ReactElement {
+  const toggle = (key: keyof FeatureFlags) => (): void => {
+    onChange({ ...flags, [key]: !flags[key] });
+  };
+  return (
+    <fieldset className="mt-4 mb-2 border p-3" data-testid="feature-flags-panel">
+      <legend className="text-sm font-semibold px-2">
+        Tech Scout feature flags (optional)
+      </legend>
+      <div className="flex flex-wrap gap-4 text-sm">
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={flags.skill_remix}
+            onChange={toggle('skill_remix')}
+            data-testid="flag-skill-remix"
+          />
+          <span>
+            Skill Remix{' '}
+            <span className="text-gray-500">
+              — turn your skills into problem statements
+            </span>
+          </span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={flags.adjacent_worlds}
+            onChange={toggle('adjacent_worlds')}
+            data-testid="flag-adjacent-worlds"
+          />
+          <span>
+            Adjacent Worlds{' '}
+            <span className="text-gray-500">— find structurally similar industries</span>
+          </span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={flags.two_pass}
+            onChange={toggle('two_pass')}
+            data-testid="flag-two-pass"
+          />
+          <span>
+            Two-Pass{' '}
+            <span className="text-gray-500">
+              — scan twice with a refinement step in between
+            </span>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+  );
 }
 
 /**
@@ -255,6 +366,7 @@ export function ProfileForm(): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const [drawer, setDrawer] = useState<DrawerState>({ open: false, question: null });
   const [submitState, setSubmitState] = useState<SubmitState>({ kind: 'idle' });
+  const [featureFlags, setFeatureFlags] = useState<FeatureFlags>(DEFAULT_FEATURE_FLAGS);
   const sessionId = useSessionId();
   useDraftLoad(setInput);
   useDraftSave(input);
@@ -274,7 +386,7 @@ export function ProfileForm(): ReactElement {
 
   const onSubmit = async (): Promise<void> => {
     setSubmitState({ kind: 'loading' });
-    const result = await submitForm(input);
+    const result = await submitForm(input, featureFlags);
     setSubmitState(result);
   };
 
@@ -331,6 +443,7 @@ export function ProfileForm(): ReactElement {
           /* no-op: assumptions will be applied server-side */
         }}
       />
+      <FeatureFlagsPanel flags={featureFlags} onChange={setFeatureFlags} />
       <SubmitBanner state={submitState} />
       <button
         type="button"

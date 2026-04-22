@@ -1,5 +1,9 @@
 import { FRAME_INPUT_SCHEMA, type FrameInput } from '../../../../lib/types/frame-input';
-import { runFrame, type FrameDeps, type FrameError } from '../../../../pipeline/steps/00-frame';
+import {
+  runFrame,
+  type FrameDeps,
+  type FrameError,
+} from '../../../../pipeline/steps/00-frame';
 import { InMemoryKVStore } from '../../../../lib/utils/kv-store';
 
 /**
@@ -10,6 +14,7 @@ const kv = new InMemoryKVStore();
 
 type Scenarios = NonNullable<FrameDeps['scenarios']>;
 type ScannerScenarios = NonNullable<FrameDeps['scannerScenarios']>;
+type ScannerFeatures = NonNullable<FrameDeps['scannerFeatures']>;
 
 /**
  * Parse the body of a request as JSON, returning undefined on failure.
@@ -63,9 +68,7 @@ function readRunTechScout(request: Request): boolean {
  * map. Invalid JSON silently falls back to undefined so the scanner
  * just uses its default fixture routing.
  */
-function readScannerScenarios(
-  request: Request,
-): ScannerScenarios | undefined {
+function readScannerScenarios(request: Request): ScannerScenarios | undefined {
   const header = request.headers.get('x-test-scanner-scenarios');
   if (!header) return undefined;
   try {
@@ -76,10 +79,35 @@ function readScannerScenarios(
 }
 
 /**
+ * Decode the x-scanner-features header into a scannerFeatures flag
+ * bag. The header carries a JSON object like
+ * `{"skill_remix":true,"adjacent_worlds":true,"two_pass":true}`.
+ * Any flag not present is treated as false by the scanner. Invalid
+ * JSON silently falls back to undefined so the run still proceeds
+ * with v2 features off instead of erroring out.
+ */
+function readScannerFeatures(request: Request): ScannerFeatures | undefined {
+  const header = request.headers.get('x-scanner-features');
+  if (!header) return undefined;
+  try {
+    const parsed = JSON.parse(header) as Record<string, unknown>;
+    const flags: ScannerFeatures = {};
+    if (parsed.skill_remix === true) flags.skill_remix = true;
+    if (parsed.adjacent_worlds === true) flags.adjacent_worlds = true;
+    if (parsed.two_pass === true) flags.two_pass = true;
+    return flags;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Validate a parsed body against the FrameInput schema. Returns either
  * the parsed input or a 400 Response ready to return to the caller.
  */
-function validateFrameInput(body: unknown): { ok: true; input: FrameInput } | { ok: false; response: Response } {
+function validateFrameInput(
+  body: unknown,
+): { ok: true; input: FrameInput } | { ok: false; response: Response } {
   const parsed = FRAME_INPUT_SCHEMA.safeParse(body);
   if (parsed.success) return { ok: true, input: parsed.data };
   return {
@@ -129,6 +157,7 @@ export async function POST(request: Request): Promise<Response> {
     scenarios: readTestScenarios(request),
     runTechScout: readRunTechScout(request),
     scannerScenarios: readScannerScenarios(request),
+    scannerFeatures: readScannerFeatures(request),
   };
   const result = await runFrame(validation.input, deps);
   if (!result.ok) {

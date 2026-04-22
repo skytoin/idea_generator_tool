@@ -15,13 +15,39 @@ export const providers = {
 } as const;
 
 /**
+ * Resolve the tech_scout model based on the `TECH_SCOUT_MODEL` env
+ * variable. Default is OpenAI gpt-4o (the historical baseline). Set
+ * `TECH_SCOUT_MODEL=sonnet` to swap in Anthropic Claude Sonnet 4.6
+ * for every tech_scout LLM call — that's expansion planning,
+ * enrichment, skill-remix, adjacent-worlds, and the pass-2 refine
+ * planner. Toggling via env means the test suite (which mocks
+ * OpenAI endpoints) stays green without needing to also mock
+ * Anthropic, while production runs can flip the switch with a
+ * single env change.
+ *
+ * Why centralize this: the tech_scout role is used by five
+ * different modules. Picking the model in one place keeps the
+ * model choice consistent across the whole scanner pipeline.
+ */
+function resolveTechScoutModel() {
+  const choice = (process.env.TECH_SCOUT_MODEL ?? '').toLowerCase().trim();
+  if (choice === 'sonnet' || choice === 'claude-sonnet-4-7') {
+    return anthropic('claude-sonnet-4-7');
+  }
+  if (choice === 'claude-sonnet-4-6') {
+    return anthropic('claude-sonnet-4-6');
+  }
+  return openai('gpt-4o');
+}
+
+/**
  * Current model assignments per pipeline role.
  * EXPERIMENT FREELY — change these as you test.
  * The only rule: don't hardcode models in step files.
  */
 export const models = {
   frame: openai('gpt-4o'),
-  tech_scout: openai('gpt-4o'),
+  tech_scout: resolveTechScoutModel(),
   scanner: openai('gpt-4o-mini'),
   aggregator: anthropic('claude-sonnet-4-6'),
   generator1: anthropic('claude-sonnet-4-6'),

@@ -30,6 +30,7 @@ export const SIGNAL_SCHEMA = z.object({
     novelty: z.number().min(1).max(10),
     specificity: z.number().min(1).max(10),
     recency: z.number().min(1).max(10),
+    relevance: z.number().min(1).max(10),
   }),
   category: SIGNAL_CATEGORY,
   raw: z.unknown(),

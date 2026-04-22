@@ -7,35 +7,82 @@ import type {
 } from '../../types';
 import type { ScannerDirectives } from '../../../../lib/types/scanner-directives';
 import type { Signal } from '../../../../lib/types/signal';
-
-const HN_SEARCH_URL = 'https://hn.algolia.com/api/v1/search';
-const MAX_QUERIES = 3;
-const HN_DEFAULT_HITS_PER_PAGE = 30;
-const HN_MIN_POINTS = 5;
+import { decomposeKeywordToString } from '../keyword-decomposition';
 
 /**
- * Build HN-shape queries from the expanded plan. Picks the top MAX_QUERIES
- * expanded_keywords and wraps each in HN's tags/numericFilters/hitsPerPage
- * syntax. Returns an empty array when the plan has no keywords.
+ * Two HN Algolia endpoints:
+ *   - /search — relevance-ranked (points + text match + freshness mix)
+ *   - /search_by_date — pure reverse-chronological
+ *
+ * We use /search_by_date for Show HN queries so we catch fresh
+ * product launches that haven't accumulated points yet, and /search
+ * for broader story queries where relevance ranking helps surface
+ * the most-discussed content.
+ */
+const HN_SEARCH_URL = 'https://hn.algolia.com/api/v1/search';
+const HN_SEARCH_BY_DATE_URL = 'https://hn.algolia.com/api/v1/search_by_date';
+const MAX_QUERIES = 6;
+const HN_DEFAULT_HITS_PER_PAGE = 30;
+const HN_MIN_POINTS = 5;
+const HN_MIN_COMMENTS = 3;
+
+/**
+ * Index below which queries use `tags=show_hn` (product launches)
+ * instead of `tags=story` (all stories). Show HN posts are literally
+ * "here's what I built" — the highest-signal HN subset for startup
+ * inspiration. The first SHOW_HN_QUERY_COUNT queries target launches;
+ * the rest use broad `story` for context and discussions.
+ */
+const SHOW_HN_QUERY_COUNT = 4;
+
+/**
+ * Build HN-shape queries from the expanded plan. Runs each hn_keyword
+ * through the shared `decomposeKeywordToString` helper which takes
+ * the first 2 content tokens after stopword stripping. HN Algolia is
+ * strict token-AND with no OR operator (verified against Algolia
+ * docs), so a 4+ token phrase almost always returns zero hits on
+ * short story titles. Keywords that resolve to an empty string after
+ * stopword stripping are silently dropped. Returns an empty array
+ * when the plan has no surviving HN keywords.
+ */
+/**
+ * Build HN queries with a split strategy:
+ *   - First SHOW_HN_QUERY_COUNT queries use `tags=show_hn` and hit
+ *     the `/search_by_date` endpoint to catch fresh product launches.
+ *     Show HN posts are "here's what I built" — the richest source
+ *     of startup-relevant signals on HN.
+ *   - Remaining queries use `tags=story` and the regular `/search`
+ *     endpoint for broader discussions, blog posts, and news.
+ *
+ * All queries require `num_comments>3` (engagement proof) alongside
+ * the existing `points>5` minimum. A post with <3 comments generated
+ * no real discussion and is likely noise.
  */
 function planQueries(
   plan: ExpandedQueryPlan,
   _directive: ScannerDirectives['tech_scout'],
 ): SourceQuery[] {
-  const top = plan.expanded_keywords.slice(0, MAX_QUERIES);
+  const top = plan.hn_keywords.slice(0, MAX_QUERIES);
   if (top.length === 0) return [];
-  const createdAfter = Math.floor(
-    new Date(plan.timeframe_iso).getTime() / 1000,
-  );
-  return top.map((kw) => ({
-    label: `hn: ${kw}`,
-    params: {
-      query: kw,
-      tags: 'story',
-      numericFilters: `created_at_i>${createdAfter},points>${HN_MIN_POINTS}`,
-      hitsPerPage: HN_DEFAULT_HITS_PER_PAGE,
-    },
-  }));
+  const createdAfter = Math.floor(new Date(plan.timeframe_iso).getTime() / 1000);
+  const numericFilters = `created_at_i>${createdAfter},points>${HN_MIN_POINTS},num_comments>${HN_MIN_COMMENTS}`;
+  const queries: SourceQuery[] = [];
+  for (let i = 0; i < top.length; i++) {
+    const query = decomposeKeywordToString(top[i]!);
+    if (query.length === 0) continue;
+    const isShowHn = i < SHOW_HN_QUERY_COUNT;
+    queries.push({
+      label: `hn: ${query}`,
+      params: {
+        query,
+        tags: isShowHn ? 'show_hn' : 'story',
+        numericFilters,
+        hitsPerPage: HN_DEFAULT_HITS_PER_PAGE,
+      },
+      ...(isShowHn ? { _useSearchByDate: true } : {}),
+    });
+  }
+  return queries;
 }
 
 /**
@@ -45,10 +92,7 @@ function planQueries(
  * as an x-test-scenario header so the MSW mock can return pre-registered
  * bodies; production runs never set the env var and omit the header.
  */
-async function fetchQueries(
-  queries: SourceQuery[],
-  opts: FetchOpts,
-): Promise<RawItem[]> {
+async function fetchQueries(queries: SourceQuery[], opts: FetchOpts): Promise<RawItem[]> {
   const out: RawItem[] = [];
   const scenario = process.env.TECH_SCOUT_SCENARIO_HN;
   const headers: Record<string, string> = {};
@@ -66,10 +110,19 @@ async function fetchQueries(
   return out;
 }
 
-/** Serialize an HN query params map into a fully-qualified request URL. */
+/**
+ * Serialize an HN query params map into a fully-qualified request URL.
+ * When the query carries `_useSearchByDate: true`, uses the date-sorted
+ * endpoint; otherwise uses the relevance-sorted endpoint. The flag is
+ * stripped from params before building the URL so it doesn't leak into
+ * the query string.
+ */
 function buildHnUrl(params: Record<string, unknown>): string {
-  const u = new URL(HN_SEARCH_URL);
+  const useDate = params._useSearchByDate === true;
+  const base = useDate ? HN_SEARCH_BY_DATE_URL : HN_SEARCH_URL;
+  const u = new URL(base);
   for (const [k, v] of Object.entries(params)) {
+    if (k === '_useSearchByDate') continue;
     if (v !== undefined) u.searchParams.set(k, String(v));
   }
   return u.toString();
@@ -93,8 +146,7 @@ type HnHit = {
  */
 function normalize(raw: RawItem): Signal {
   const hit = raw.data as HnHit;
-  const url =
-    hit.url ?? `https://news.ycombinator.com/item?id=${hit.objectID}`;
+  const url = hit.url ?? `https://news.ycombinator.com/item?id=${hit.objectID}`;
   const author = hit.author ?? 'unknown';
   const points = hit.points ?? 0;
   const comments = hit.num_comments ?? 0;
@@ -105,7 +157,7 @@ function normalize(raw: RawItem): Signal {
     url,
     date: hit.created_at ?? null,
     snippet,
-    score: { novelty: 5, specificity: 5, recency: 5 },
+    score: { novelty: 5, specificity: 5, recency: 5, relevance: 5 },
     category: 'tech_capability',
     raw: hit,
   };

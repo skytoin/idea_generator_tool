@@ -8,12 +8,45 @@ import type {
 import type { ScannerDirectives } from '../../../../lib/types/scanner-directives';
 import type { Signal } from '../../../../lib/types/signal';
 import { logger } from '../../../../lib/utils/logger';
+import { decomposeKeywordToString } from '../keyword-decomposition';
 
 const GH_SEARCH_URL = 'https://api.github.com/search/repositories';
-const MAX_QUERIES = 4;
+const MAX_QUERIES = 6;
 const DEFAULT_MIN_STARS = 50;
+const PRODUCT_MIN_STARS = 20;
 const DEFAULT_PER_PAGE = '20';
 const MAX_TOPICS_IN_SNIPPET = 5;
+
+/**
+ * GitHub topic filters chosen based on the founder's profile. When
+ * domain_tags suggest a consumer/SaaS founder, we filter for product
+ * repos. When domain_tags suggest a developer-tools founder, we
+ * filter for developer infrastructure. This is PROFILE-ADAPTIVE —
+ * the same adapter works for both audiences without hardcoding.
+ */
+const CONSUMER_TOPIC_FILTER = 'topic:saas OR topic:self-hosted OR topic:webapp';
+const DEVTOOL_TOPIC_FILTER = 'topic:cli OR topic:framework OR topic:developer-tools';
+const TOPIC_QUERY_COUNT = 3;
+
+/**
+ * Domain tags that indicate the founder's audience is DEVELOPERS,
+ * not end-users. When any of these appear in the plan's domain_tags,
+ * GitHub queries use the devtool topic filter instead of the
+ * consumer/SaaS filter. This lets a DevOps founder find CLI tools
+ * and frameworks while a SaaS founder finds consumer products.
+ */
+const DEV_AUDIENCE_TAGS: ReadonlySet<string> = new Set([
+  'developer-tools',
+  'devtools',
+  'devops',
+  'infrastructure',
+  'open-source',
+  'cli',
+  'framework',
+  'sdk',
+  'api',
+  'platform-engineering',
+]);
 
 /**
  * Raised when GitHub rejects a request with 403 (rate-limit or auth
@@ -29,67 +62,104 @@ export class GithubDeniedError extends Error {
 }
 
 /**
- * Build GitHub Search queries from the expanded plan. With languages
- * provided, emits the cross-product of the top 2 keywords x top 2
- * languages. Without languages, falls back to the top 3 keyword-only
- * queries. Every query carries `stars:>50` plus a recent-push filter
- * derived from `plan.timeframe_iso`, and is capped at MAX_QUERIES so
- * the GitHub Search rate budget stays predictable.
+ * Prepare an LLM-produced github keyword for the search API. Two steps:
+ *   1. Strip any stray quote characters (the LLM sometimes wraps
+ *      phrases in quotes, which would become an exact-phrase match
+ *      and almost never hit real repos).
+ *   2. Decompose to the first 2 content tokens via the shared
+ *      `decomposeKeywordToString` helper. GitHub search is strict
+ *      token-AND (verified against GitHub docs), so a 4-token
+ *      keyword like "privacy-preserving data collection library"
+ *      requires all four tokens to co-occur — very rare. Two
+ *      content tokens is the empirical sweet spot for matching
+ *      real repositories.
+ *
+ * Returns the empty string when the keyword has no content tokens
+ * (e.g. when it's entirely stopwords), so the caller can drop it.
+ */
+function sanitizeKeyword(kw: string): string {
+  const unquoted = kw.replace(/"/g, '').replace(/\s+/g, ' ').trim();
+  return decomposeKeywordToString(unquoted);
+}
+
+/**
+ * Build GitHub Search queries from per-source github_keywords.
+ *
+ * Language filter policy: the adapter NEVER emits a `language:` GitHub
+ * qualifier on its own. The scanner's job is to surface inspiring
+ * projects regardless of the language they're written in — a brilliant
+ * TypeScript MCP server or a Rust consumer tool is just as valuable
+ * as a Python one for a Python-skilled founder. Restricting every
+ * query to the founder's primary language systematically hides 80%+
+ * of what's happening on GitHub (GitHub's top languages cover JS/TS,
+ * Python, Rust, Go, C++, Java, and more). The `plan.github_languages`
+ * field is preserved in the schema for forward compatibility but is
+ * deliberately not consumed here. If a future caller needs to hard-
+ * filter by language, that should be an explicit per-run directive
+ * option, not an automatic inference from the founder's skill list.
+ *
+ * Keywords are passed UNQUOTED so GitHub matches each token
+ * individually; every query carries `stars:>50` and a
+ * `pushed:>YYYY-MM-DD` recent-activity filter. One query per
+ * keyword, capped at MAX_QUERIES.
+ */
+/**
+ * Detect whether the founder's profile targets developers based on
+ * the LLM planner's domain_tags. If ANY tag matches the dev-audience
+ * set, the founder is building for developers and the adapter uses
+ * devtool topic filters instead of consumer/SaaS filters.
+ */
+function isDevAudience(domainTags: readonly string[]): boolean {
+  return domainTags.some((tag) => DEV_AUDIENCE_TAGS.has(tag.toLowerCase()));
+}
+
+/**
+ * Build GitHub Search queries with a profile-adaptive split strategy:
+ *
+ *   - First TOPIC_QUERY_COUNT queries get a topic filter based on who
+ *     the founder is building for:
+ *       • Consumer/SaaS founder → `topic:saas OR topic:self-hosted OR
+ *         topic:webapp` + stars:>20 (find products)
+ *       • Developer-tools founder → `topic:cli OR topic:framework OR
+ *         topic:developer-tools` + stars:>20 (find dev infra)
+ *   - Remaining queries use the original broad search with stars:>50
+ *     and no topic filter for diversity.
+ *
+ * The adapter reads `plan.domain_tags` (set by the LLM expansion
+ * planner based on the founder's profile) to decide which audience
+ * the founder serves. This means the same code adapts automatically
+ * for a nurse building patient tools, a marketer building analytics
+ * SaaS, or a DevOps engineer building CLI infrastructure — without
+ * hardcoding any audience name.
  */
 function planQueries(
   plan: ExpandedQueryPlan,
   _directive: ScannerDirectives['tech_scout'],
 ): SourceQuery[] {
-  const kws = plan.expanded_keywords;
+  const kws = plan.github_keywords
+    .slice(0, MAX_QUERIES)
+    .map(sanitizeKeyword)
+    .filter((k) => k.length > 0);
   if (kws.length === 0) return [];
-  const langs = plan.github_languages.slice(0, 2);
   const pushedAfter = plan.timeframe_iso.slice(0, 10);
+  const topicFilter = isDevAudience(plan.domain_tags)
+    ? DEVTOOL_TOPIC_FILTER
+    : CONSUMER_TOPIC_FILTER;
 
-  const queries: SourceQuery[] =
-    langs.length === 0
-      ? buildKeywordOnlyQueries(kws, pushedAfter)
-      : buildKeywordLanguageQueries(kws, langs, pushedAfter);
-
-  return queries.slice(0, MAX_QUERIES);
-}
-
-/** Build the top-3 keyword-only query list used when github_languages is empty. */
-function buildKeywordOnlyQueries(
-  kws: string[],
-  pushedAfter: string,
-): SourceQuery[] {
-  return kws.slice(0, 3).map((kw) => ({
-    label: `github: "${kw}"`,
-    params: {
-      q: `"${kw}" stars:>${DEFAULT_MIN_STARS} pushed:>${pushedAfter}`,
-      sort: 'stars',
-      order: 'desc',
-      per_page: DEFAULT_PER_PAGE,
-    },
-  }));
-}
-
-/** Build the cross-product of top-2 keywords and top-2 languages. */
-function buildKeywordLanguageQueries(
-  kws: string[],
-  langs: string[],
-  pushedAfter: string,
-): SourceQuery[] {
-  const out: SourceQuery[] = [];
-  for (const kw of kws.slice(0, 2)) {
-    for (const lang of langs) {
-      out.push({
-        label: `github: "${kw}" ${lang}`,
-        params: {
-          q: `"${kw}" language:${lang} stars:>${DEFAULT_MIN_STARS} pushed:>${pushedAfter}`,
-          sort: 'stars',
-          order: 'desc',
-          per_page: DEFAULT_PER_PAGE,
-        },
-      });
-    }
-  }
-  return out;
+  return kws.map((kw, i) => {
+    const isTopicQuery = i < TOPIC_QUERY_COUNT;
+    const stars = isTopicQuery ? PRODUCT_MIN_STARS : DEFAULT_MIN_STARS;
+    const filter = isTopicQuery ? ` ${topicFilter}` : '';
+    return {
+      label: `github: ${kw}`,
+      params: {
+        q: `${kw} stars:>${stars} pushed:>${pushedAfter}${filter}`,
+        sort: 'stars',
+        order: 'desc',
+        per_page: DEFAULT_PER_PAGE,
+      },
+    };
+  });
 }
 
 /**
@@ -180,8 +250,7 @@ type GhRepo = {
 function normalize(raw: RawItem): Signal {
   const r = raw.data as GhRepo;
   const topicsShown = r.topics.slice(0, MAX_TOPICS_IN_SNIPPET);
-  const topicsStr =
-    topicsShown.length > 0 ? `, topics: ${topicsShown.join(', ')}` : '';
+  const topicsStr = topicsShown.length > 0 ? `, topics: ${topicsShown.join(', ')}` : '';
   const lang = r.language ?? 'unknown';
   const base = `GitHub: ⭐ ${r.stargazers_count}, ${r.forks_count} forks, ${lang}${topicsStr}.`;
   const snippet = r.description ? `${base} ${r.description}` : base;
@@ -191,7 +260,7 @@ function normalize(raw: RawItem): Signal {
     url: r.html_url,
     date: r.pushed_at,
     snippet,
-    score: { novelty: 5, specificity: 5, recency: 5 },
+    score: { novelty: 5, specificity: 5, recency: 5, relevance: 5 },
     category: 'adoption',
     raw: r,
   };

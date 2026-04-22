@@ -6,11 +6,15 @@ import type { ScannerReport } from '../../lib/types/scanner-report';
 /**
  * LLM-produced query expansion plan. The tech_scout planner takes the
  * frame directive + founder narrative and expands the seed keywords
- * into source-specific axes (arxiv categories, github languages, etc.)
- * so each adapter can build targeted queries without re-running the LLM.
+ * into per-source keyword lists so each adapter gets divergent,
+ * source-optimized search terms. HN keywords target product discussions,
+ * arxiv keywords target academic research, GitHub keywords target
+ * implementations and libraries.
  */
 export type ExpandedQueryPlan = {
-  expanded_keywords: string[];
+  hn_keywords: string[];
+  arxiv_keywords: string[];
+  github_keywords: string[];
   arxiv_categories: string[];
   github_languages: string[];
   domain_tags: string[];
@@ -67,7 +71,12 @@ export type SourceAdapter = {
  * Dependencies injected into every scanner run. `clock` is a testable
  * time source; `scenarios` is an optional per-component MSW scenario
  * selector so tests can drive each adapter (hn_algolia, arxiv, github)
- * or LLM pass (expansion, enrichment) into a specific fixture branch.
+ * or LLM pass (expansion, enrichment, skill_remix, adjacent_worlds,
+ * refine) into a specific fixture branch. `features` is a per-run
+ * flag bag for opt-in v2 pipeline stages: set `skill_remix` to inject
+ * problem hunts, `adjacent_worlds` to inject analogical worlds, and
+ * `two_pass` to run the pass-1 → refine → pass-2 loop. All default to
+ * OFF so existing v1 behavior is unchanged when these are omitted.
  */
 export type ScannerDeps = {
   clock: () => Date;
@@ -77,6 +86,14 @@ export type ScannerDeps = {
     hn_algolia?: string;
     arxiv?: string;
     github?: string;
+    skill_remix?: string;
+    adjacent_worlds?: string;
+    refine?: string;
+  };
+  features?: {
+    skill_remix?: boolean;
+    adjacent_worlds?: boolean;
+    two_pass?: boolean;
   };
 };
 

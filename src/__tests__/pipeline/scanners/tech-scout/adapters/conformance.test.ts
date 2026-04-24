@@ -1,17 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { TECH_SCOUT_ADAPTERS } from '../../../../../pipeline/scanners/tech-scout/adapters';
 import { SIGNAL_SCHEMA } from '../../../../../lib/types/signal';
-import type {
-  ExpandedQueryPlan,
-  RawItem,
-} from '../../../../../pipeline/scanners/types';
+import type { ExpandedQueryPlan, RawItem } from '../../../../../pipeline/scanners/types';
 import type { ScannerDirectives } from '../../../../../lib/types/scanner-directives';
 
 /** A sparse but valid expanded query plan every adapter can plan against. */
 const SPARSE_PLAN: ExpandedQueryPlan = {
-  expanded_keywords: ['fraud detection'],
+  hn_keywords: ['fraud detection'],
+  arxiv_keywords: ['fraud detection'],
+  github_keywords: ['fraud detection'],
+  reddit_keywords: ['fraud complaints'],
+  huggingface_keywords: ['fraud detection'],
   arxiv_categories: ['cs.LG'],
   github_languages: ['python'],
+  reddit_subreddits: ['datascience'],
   domain_tags: ['fintech'],
   timeframe_iso: '2026-01-01T00:00:00.000Z',
 };
@@ -21,7 +23,7 @@ const SPARSE_DIRECTIVE: ScannerDirectives['tech_scout'] = {
   keywords: ['fraud detection'],
   exclude: [],
   notes: '',
-  target_sources: ['hn', 'arxiv', 'github'],
+  target_sources: ['hn', 'arxiv', 'github', 'reddit'],
   timeframe: 'last 6 months',
 };
 
@@ -72,6 +74,46 @@ const RAW_ITEM_FIXTURES: Record<string, RawItem> = {
       pushed_at: '2026-04-01T00:00:00Z',
       created_at: '2024-01-01T00:00:00Z',
       license: { name: 'MIT' },
+    },
+  },
+  reddit: {
+    source: 'reddit',
+    data: {
+      id: 'abc123',
+      title: 'Conformance fixture post',
+      url: 'https://www.reddit.com/r/datascience/comments/abc123/conformance_fixture_post/',
+      permalink: '/r/datascience/comments/abc123/conformance_fixture_post/',
+      created_utc: 1742000000,
+      score: 42,
+      num_comments: 12,
+      author: 'conformance-bot',
+      subreddit: 'datascience',
+      selftext: 'A short self-post body used as a valid normalize() input.',
+      is_self: true,
+      over_18: false,
+      upvote_ratio: 0.95,
+      link_flair_text: null,
+    },
+  },
+  huggingface: {
+    source: 'huggingface',
+    data: {
+      _surface: 'models',
+      raw: {
+        id: 'conformance/model',
+        modelId: 'conformance/model',
+        author: 'conformance',
+        likes: 100,
+        downloads: 5000,
+        trendingScore: 50,
+        pipeline_tag: 'text-classification',
+        library_name: 'transformers',
+        tags: ['transformers', 'license:apache-2.0'],
+        createdAt: '2026-04-01T00:00:00.000Z',
+        lastModified: '2026-04-15T00:00:00.000Z',
+        private: false,
+        gated: false,
+      },
     },
   },
 };

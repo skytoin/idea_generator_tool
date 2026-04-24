@@ -9,14 +9,25 @@ import type { ScannerReport } from '../../lib/types/scanner-report';
  * into per-source keyword lists so each adapter gets divergent,
  * source-optimized search terms. HN keywords target product discussions,
  * arxiv keywords target academic research, GitHub keywords target
- * implementations and libraries.
+ * implementations and libraries, Reddit keywords target niche-community
+ * discussions + real-user pain complaints, and Hugging Face keywords
+ * target trending models / spaces / daily-papers (short capability or
+ * domain words the HF community actually uses in repo names and tags).
+ * `reddit_subreddits` is an LLM-picked list of technical/domain
+ * subreddit names (no `r/` prefix, lower/mixed case) that the Reddit
+ * adapter cycles through per query slot; the adapter also merges in a
+ * profile-agnostic baseline so founder-universal subs (startups,
+ * microsaas, etc.) are always covered.
  */
 export type ExpandedQueryPlan = {
   hn_keywords: string[];
   arxiv_keywords: string[];
   github_keywords: string[];
+  reddit_keywords: string[];
+  huggingface_keywords: string[];
   arxiv_categories: string[];
   github_languages: string[];
+  reddit_subreddits: string[];
   domain_tags: string[];
   timeframe_iso: string;
 };
@@ -86,6 +97,8 @@ export type ScannerDeps = {
     hn_algolia?: string;
     arxiv?: string;
     github?: string;
+    reddit?: string;
+    huggingface?: string;
     skill_remix?: string;
     adjacent_worlds?: string;
     refine?: string;

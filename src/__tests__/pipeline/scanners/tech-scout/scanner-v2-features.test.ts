@@ -65,6 +65,8 @@ function buildExpansionJson(
     hn_keywords: string[];
     arxiv_keywords: string[];
     github_keywords: string[];
+    reddit_keywords: string[];
+    reddit_subreddits: string[];
   }> = {},
 ): string {
   return JSON.stringify({
@@ -86,8 +88,14 @@ function buildExpansionJson(
       'ehr pipeline',
       'python nlp kit',
     ],
+    reddit_keywords: overrides.reddit_keywords ?? [
+      'clinical workflow pain',
+      'ehr frustration',
+      'nurse charting',
+    ],
     arxiv_categories: ['cs.CL'],
     github_languages: ['python'],
+    reddit_subreddits: overrides.reddit_subreddits ?? ['nursing', 'healthIT'],
     domain_tags: ['healthcare'],
   });
 }
@@ -178,24 +186,19 @@ describe('runTechScout — features.skill_remix flag', () => {
     registerHappyPathMocks();
     setOpenAIResponse('v2f-remix', { content: buildRemixJson(3) });
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          skill_remix: 'v2f-remix',
-        },
-        features: { skill_remix: true },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        skill_remix: 'v2f-remix',
       },
-    );
+      features: { skill_remix: true },
+    });
 
-    expect(
-      report.warnings.some((w) => w.startsWith('skill_remix_fallback:')),
-    ).toBe(false);
+    expect(report.warnings.some((w) => w.startsWith('skill_remix_fallback:'))).toBe(
+      false,
+    );
     expect(report.status).toBe('ok');
   }, 60_000);
 
@@ -203,24 +206,17 @@ describe('runTechScout — features.skill_remix flag', () => {
     registerHappyPathMocks();
     // No v2f-remix-missing registered → schema_invalid fallback.
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          skill_remix: 'v2f-remix-missing',
-        },
-        features: { skill_remix: true },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        skill_remix: 'v2f-remix-missing',
       },
-    );
+      features: { skill_remix: true },
+    });
 
-    expect(
-      report.warnings.some((w) => w.startsWith('skill_remix_fallback:')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.startsWith('skill_remix_fallback:'))).toBe(true);
     // Scanner still produced signals even though skill_remix failed.
     expect(report.signals.length).toBeGreaterThan(0);
   }, 60_000);
@@ -228,22 +224,17 @@ describe('runTechScout — features.skill_remix flag', () => {
   it('does not call skill_remix when the flag is off (no warning regardless)', async () => {
     registerHappyPathMocks();
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-        },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
       },
-    );
+    });
 
-    expect(
-      report.warnings.some((w) => w.startsWith('skill_remix_fallback:')),
-    ).toBe(false);
+    expect(report.warnings.some((w) => w.startsWith('skill_remix_fallback:'))).toBe(
+      false,
+    );
   }, 60_000);
 });
 
@@ -254,48 +245,38 @@ describe('runTechScout — features.adjacent_worlds flag', () => {
     registerHappyPathMocks();
     setOpenAIResponse('v2f-adj', { content: buildWorldsJson(2) });
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          adjacent_worlds: 'v2f-adj',
-        },
-        features: { adjacent_worlds: true },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        adjacent_worlds: 'v2f-adj',
       },
-    );
+      features: { adjacent_worlds: true },
+    });
 
-    expect(
-      report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:')),
-    ).toBe(false);
+    expect(report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:'))).toBe(
+      false,
+    );
     expect(report.status).toBe('ok');
   }, 60_000);
 
   it('records an adjacent_worlds_fallback warning when the LLM fails', async () => {
     registerHappyPathMocks();
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          adjacent_worlds: 'v2f-adj-missing',
-        },
-        features: { adjacent_worlds: true },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        adjacent_worlds: 'v2f-adj-missing',
       },
-    );
+      features: { adjacent_worlds: true },
+    });
 
-    expect(
-      report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:'))).toBe(
+      true,
+    );
     expect(report.signals.length).toBeGreaterThan(0);
   }, 60_000);
 });
@@ -308,29 +289,24 @@ describe('runTechScout — both v2 flags together', () => {
     setOpenAIResponse('v2f-remix', { content: buildRemixJson(3) });
     setOpenAIResponse('v2f-adj', { content: buildWorldsJson(2) });
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          skill_remix: 'v2f-remix',
-          adjacent_worlds: 'v2f-adj',
-        },
-        features: { skill_remix: true, adjacent_worlds: true },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        skill_remix: 'v2f-remix',
+        adjacent_worlds: 'v2f-adj',
       },
-    );
+      features: { skill_remix: true, adjacent_worlds: true },
+    });
 
     // Both stages must succeed (no fallback warnings) and the run is ok.
-    expect(
-      report.warnings.some((w) => w.startsWith('skill_remix_fallback:')),
-    ).toBe(false);
-    expect(
-      report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:')),
-    ).toBe(false);
+    expect(report.warnings.some((w) => w.startsWith('skill_remix_fallback:'))).toBe(
+      false,
+    );
+    expect(report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:'))).toBe(
+      false,
+    );
     expect(report.status).toBe('ok');
   }, 60_000);
 
@@ -339,28 +315,23 @@ describe('runTechScout — both v2 flags together', () => {
     setOpenAIResponse('v2f-remix', { content: buildRemixJson(3) });
     // adjacent_worlds intentionally missing.
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          skill_remix: 'v2f-remix',
-          adjacent_worlds: 'v2f-adj-missing',
-        },
-        features: { skill_remix: true, adjacent_worlds: true },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        skill_remix: 'v2f-remix',
+        adjacent_worlds: 'v2f-adj-missing',
       },
-    );
+      features: { skill_remix: true, adjacent_worlds: true },
+    });
 
-    expect(
-      report.warnings.some((w) => w.startsWith('skill_remix_fallback:')),
-    ).toBe(false);
-    expect(
-      report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.startsWith('skill_remix_fallback:'))).toBe(
+      false,
+    );
+    expect(report.warnings.some((w) => w.startsWith('adjacent_worlds_fallback:'))).toBe(
+      true,
+    );
   }, 60_000);
 });
 
@@ -388,26 +359,21 @@ describe('runTechScout — all three v2 flags at once', () => {
     });
     stubEnv();
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: CLOCK,
-        scenarios: {
-          expansion: 'v2f-expansion',
-          enrichment: 'v2f-enrich',
-          skill_remix: 'v2f-remix',
-          adjacent_worlds: 'v2f-adj',
-          refine: 'v2f-refine',
-        },
-        features: {
-          skill_remix: true,
-          adjacent_worlds: true,
-          two_pass: true,
-        },
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: CLOCK,
+      scenarios: {
+        expansion: 'v2f-expansion',
+        enrichment: 'v2f-enrich',
+        skill_remix: 'v2f-remix',
+        adjacent_worlds: 'v2f-adj',
+        refine: 'v2f-refine',
       },
-    );
+      features: {
+        skill_remix: true,
+        adjacent_worlds: true,
+        two_pass: true,
+      },
+    });
 
     // All three stages succeed → no fallback warnings and two_pass_meta set.
     expect(

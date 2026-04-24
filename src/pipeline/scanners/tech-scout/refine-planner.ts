@@ -16,6 +16,7 @@ import {
 import {
   parseTimeframeToIso,
   enforceAcronymPreservation,
+  sanitizeGithubLanguages,
 } from './query-planner';
 
 /**
@@ -74,13 +75,19 @@ export async function refinePlan(args: {
         message: `pass-2 planner reused exhausted labels: ${reused.join(', ')}`,
       });
     }
-    const acronymPreserved = enforceAcronymPreservation(validated.data, directive.keywords);
+    const acronymPreserved = enforceAcronymPreservation(
+      validated.data,
+      directive.keywords,
+    );
     return ok({
       hn_keywords: acronymPreserved.hn_keywords,
       arxiv_keywords: acronymPreserved.arxiv_keywords,
       github_keywords: acronymPreserved.github_keywords,
+      reddit_keywords: acronymPreserved.reddit_keywords,
+      huggingface_keywords: acronymPreserved.huggingface_keywords,
       arxiv_categories: acronymPreserved.arxiv_categories,
-      github_languages: acronymPreserved.github_languages,
+      github_languages: sanitizeGithubLanguages(acronymPreserved.github_languages),
+      reddit_subreddits: acronymPreserved.reddit_subreddits,
       domain_tags: acronymPreserved.domain_tags,
       timeframe_iso: parseTimeframeToIso(directive.timeframe, clock()),
     });
@@ -100,6 +107,8 @@ function findReusedExhausted(
     hn_keywords: string[];
     arxiv_keywords: string[];
     github_keywords: string[];
+    reddit_keywords: string[];
+    huggingface_keywords: string[];
   },
   exhausted: readonly string[],
 ): string[] {
@@ -108,6 +117,8 @@ function findReusedExhausted(
     ...response.hn_keywords,
     ...response.arxiv_keywords,
     ...response.github_keywords,
+    ...response.reddit_keywords,
+    ...response.huggingface_keywords,
   ]
     .join(' ')
     .toLowerCase();

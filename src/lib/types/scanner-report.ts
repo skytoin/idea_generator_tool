@@ -81,6 +81,14 @@ export const SCANNER_REPORT_SCHEMA = z.object({
   warnings: z.array(z.string()),
   two_pass_meta: TWO_PASS_META_SCHEMA.nullish(),
   v2_features_meta: V2_FEATURES_META_SCHEMA.nullish(),
+  /**
+   * Identifier of the LLM that produced the tech_scout enrichment /
+   * planning calls for this run (e.g. "gpt-4o", "claude-opus-4-6").
+   * Surfaced so the admin debug view can confirm which model the
+   * `TECH_SCOUT_MODEL` env var actually resolved to. Nullish so older
+   * fixtures and the synthetic crash report stay valid without it.
+   */
+  model_used: z.string().nullish(),
 });
 
 export type ScannerReport = z.infer<typeof SCANNER_REPORT_SCHEMA>;

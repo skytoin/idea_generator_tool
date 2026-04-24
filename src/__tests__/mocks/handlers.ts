@@ -4,17 +4,17 @@ import {
   getHnResponse,
   getArxivResponse,
   getGithubResponse,
+  getRedditResponse,
+  getHuggingfaceResponse,
 } from './scanner-mocks';
 
 /** Mock Anthropic API response */
-export const anthropicHandler = http.post(
-  'https://api.anthropic.com/v1/messages',
-  () =>
-    HttpResponse.json({
-      content: [{ type: 'text', text: '{"ideas": []}' }],
-      model: 'claude-sonnet-4-6',
-      stop_reason: 'end_turn',
-    }),
+export const anthropicHandler = http.post('https://api.anthropic.com/v1/messages', () =>
+  HttpResponse.json({
+    content: [{ type: 'text', text: '{"ideas": []}' }],
+    model: 'claude-sonnet-4-6',
+    stop_reason: 'end_turn',
+  }),
 );
 
 /** Build a chat/completions-shaped JSON body for a content string. */
@@ -195,6 +195,101 @@ export const githubSearchHandler = http.get(
   },
 );
 
+/** Empty Reddit Listing payload used when no scenario matches. */
+const EMPTY_REDDIT_PAYLOAD = {
+  kind: 'Listing',
+  data: { after: null, before: null, children: [] },
+};
+
+/**
+ * Mock Reddit subreddit search endpoint with scenario routing. The
+ * `:sub` path param matches any subreddit (case preserved) so tests
+ * don't have to register one handler per sub. A body of
+ * `{ __denied: <code> }` returns that HTTP status so tests can
+ * exercise the 401/403/429 paths without a real API. When no
+ * scenario is registered the handler returns an empty Listing so
+ * unrelated tests that incidentally hit the adapter still return a
+ * clean shape.
+ */
+/**
+ * Build the shared scenario-routing response logic used by both the
+ * per-sub and cross-sub Reddit handlers. Pulled out so the two
+ * endpoints stay in lockstep — adding a new fixture or denial
+ * shape only has to be edited in one place.
+ */
+function buildRedditScenarioResponse(request: Request): Response {
+  const scenario = request.headers.get('x-test-scenario');
+  if (scenario) {
+    const body = getRedditResponse(scenario);
+    if (body && typeof body === 'object' && '__denied' in body) {
+      const denied = (body as { __denied: number }).__denied;
+      return new HttpResponse(JSON.stringify({ message: 'denied' }), {
+        status: denied,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (body !== undefined) return HttpResponse.json(body);
+  }
+  return HttpResponse.json(EMPTY_REDDIT_PAYLOAD);
+}
+
+export const redditSearchHandler = http.get(
+  'https://www.reddit.com/r/:sub/search.json',
+  ({ request }) => buildRedditScenarioResponse(request),
+);
+
+/**
+ * Mock Reddit's site-wide cross-sub search endpoint. Used by the
+ * Tier-1 cross-sub pain query that OR's `subreddit:` clauses into
+ * the `q=` param rather than restricting per-URL. Shares the same
+ * scenario routing as the per-sub handler so tests can register
+ * one fixture and reuse it across both endpoints when needed.
+ */
+export const redditCrossSubSearchHandler = http.get(
+  'https://www.reddit.com/search.json',
+  ({ request }) => buildRedditScenarioResponse(request),
+);
+
+/**
+ * Build the shared scenario-routing response for the Hugging Face
+ * handlers. All three HF surfaces (models, spaces, daily_papers)
+ * share one scenario registry — tests register an array body
+ * specific to whatever surface they're exercising. Pass
+ * `{ __denied: <code> }` to simulate a 401/403/429 path.
+ */
+function buildHuggingfaceScenarioResponse(request: Request): Response {
+  const scenario = request.headers.get('x-test-scenario');
+  if (scenario) {
+    const body = getHuggingfaceResponse(scenario);
+    if (body && typeof body === 'object' && '__denied' in body) {
+      const denied = (body as { __denied: number }).__denied;
+      return new HttpResponse(JSON.stringify({ error: 'denied' }), {
+        status: denied,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (body !== undefined) return HttpResponse.json(body);
+  }
+  // No scenario registered → empty array (consistent with HF behavior
+  // when a search returns no results).
+  return HttpResponse.json([]);
+}
+
+export const huggingfaceModelsHandler = http.get(
+  'https://huggingface.co/api/models',
+  ({ request }) => buildHuggingfaceScenarioResponse(request),
+);
+
+export const huggingfaceSpacesHandler = http.get(
+  'https://huggingface.co/api/spaces',
+  ({ request }) => buildHuggingfaceScenarioResponse(request),
+);
+
+export const huggingfaceDailyPapersHandler = http.get(
+  'https://huggingface.co/api/daily_papers',
+  ({ request }) => buildHuggingfaceScenarioResponse(request),
+);
+
 export const handlers = [
   anthropicHandler,
   openaiChatHandler,
@@ -204,4 +299,9 @@ export const handlers = [
   hnAlgoliaHandler,
   arxivHandler,
   githubSearchHandler,
+  redditSearchHandler,
+  redditCrossSubSearchHandler,
+  huggingfaceModelsHandler,
+  huggingfaceSpacesHandler,
+  huggingfaceDailyPapersHandler,
 ];

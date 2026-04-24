@@ -65,8 +65,10 @@ function buildRefineJson(
     hn_keywords: string[];
     arxiv_keywords: string[];
     github_keywords: string[];
+    reddit_keywords: string[];
     arxiv_categories: string[];
     github_languages: string[];
+    reddit_subreddits: string[];
     domain_tags: string[];
   }> = {},
 ): string {
@@ -89,8 +91,14 @@ function buildRefineJson(
       'feature store py',
       'workflow tool',
     ],
+    reddit_keywords: overrides.reddit_keywords ?? [
+      'data collection frustration',
+      'analytics tool alternatives',
+      'indie founder complaints',
+    ],
     arxiv_categories: overrides.arxiv_categories ?? ['cs.LG'],
     github_languages: overrides.github_languages ?? ['python'],
+    reddit_subreddits: overrides.reddit_subreddits ?? ['datascience', 'SaaS'],
     domain_tags: overrides.domain_tags ?? ['fintech'],
   });
 }

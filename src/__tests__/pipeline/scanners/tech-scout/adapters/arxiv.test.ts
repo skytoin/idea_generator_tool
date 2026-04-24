@@ -1,10 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { http, HttpResponse } from 'msw';
 import {
   arxivAdapter,
   fetchQueries,
+  shouldAnchorFirstTokenInTitle,
 } from '../../../../../pipeline/scanners/tech-scout/adapters/arxiv';
 import { setArxivResponse, resetScannerMocks } from '../../../../mocks/scanner-mocks';
 import { SAMPLE_ARXIV_XML } from '../../../../mocks/arxiv-fixtures';
+import { server } from '../../../../mocks/server';
 import type {
   SourceAdapter,
   ExpandedQueryPlan,
@@ -19,8 +22,11 @@ function buildPlan(overrides: Partial<ExpandedQueryPlan> = {}): ExpandedQueryPla
     hn_keywords: ['fraud hn'],
     arxiv_keywords: ['fraud', 'anomaly', 'ML'],
     github_keywords: ['fraud github'],
+    reddit_keywords: [],
+    huggingface_keywords: [],
     arxiv_categories: ['cs.LG', 'cs.CR', 'stat.ML'],
     github_languages: ['python'],
+    reddit_subreddits: [],
     domain_tags: ['fintech'],
     timeframe_iso: '2025-10-11T12:00:00.000Z',
     ...overrides,
@@ -89,7 +95,7 @@ describe('arxivAdapter.planQueries', () => {
     for (const q of queries) {
       expect(q.params.sortBy).toBe('submittedDate');
       expect(q.params.sortOrder).toBe('descending');
-      expect(q.params.max_results).toBe('20');
+      expect(q.params.max_results).toBe('100');
       expect(typeof q.params.search_query).toBe('string');
       expect(q.params.search_query as string).toMatch(/^cat:.+\+AND\+/);
     }
@@ -493,15 +499,20 @@ describe('arxivAdapter.planQueries — keyword decomposition (profile-agnostic)'
     expect(searchQueryFor('MCP')).toBe('cat:cs.LG+AND+ti:MCP');
   });
 
-  it('4-token tech keyword → first 2 content tokens in parenthesized AND', () => {
+  it('4-token tech keyword → first 2 content tokens in parenthesized AND (smart anchor: "novel" is generic, falls back to abs)', () => {
+    // "novel" is in GENERIC_FIRST_TOKEN_DENY_LIST so the first token
+    // is searched in `abs:` rather than `ti:` — title-anchoring on
+    // "novel" silently kills recall because few paper titles ARE
+    // about novelty itself.
     expect(searchQueryFor('novel data imputation techniques')).toBe(
-      'cat:cs.LG+AND+%28ti:novel+AND+abs:data%29',
+      'cat:cs.LG+AND+%28abs:novel+AND+abs:data%29',
     );
   });
 
-  it('5-token tech keyword → first 2 content tokens', () => {
+  it('5-token tech keyword → first 2 content tokens (smart anchor: "recent" is generic, falls back to abs)', () => {
+    // Same reason as above — "recent" rarely carries paper-title aboutness.
     expect(searchQueryFor('recent advancements in supervised learning')).toBe(
-      'cat:cs.LG+AND+%28ti:recent+AND+abs:advancements%29',
+      'cat:cs.LG+AND+%28abs:recent+AND+abs:advancements%29',
     );
   });
 
@@ -536,7 +547,7 @@ describe('arxivAdapter.planQueries — keyword decomposition (profile-agnostic)'
     );
   });
 
-  it('drops a keyword that becomes empty after stopword stripping', () => {
+  it('drops a keyword that becomes empty after stopword stripping (smart anchor: "real" is generic, falls back to abs)', () => {
     const queries = arxivAdapter.planQueries(
       buildPlan({
         arxiv_categories: ['cs.LG'],
@@ -546,7 +557,7 @@ describe('arxivAdapter.planQueries — keyword decomposition (profile-agnostic)'
     );
     expect(queries).toHaveLength(1);
     expect(stripDateRange(String(queries[0]!.params.search_query))).toBe(
-      'cat:cs.LG+AND+%28ti:real+AND+abs:keyword%29',
+      'cat:cs.LG+AND+%28abs:real+AND+abs:keyword%29',
     );
   });
 
@@ -615,7 +626,7 @@ describe('arxivAdapter.planQueries — Sonnet field-prefix sanitization', () => 
     );
   });
 
-  it('drops the whole keyword if it was ONLY a `cat:X.Y` token', () => {
+  it('drops the whole keyword if it was ONLY a `cat:X.Y` token (smart anchor: "real" generic → abs)', () => {
     const queries = arxivAdapter.planQueries(
       buildPlan({
         arxiv_categories: ['cs.LG'],
@@ -625,7 +636,7 @@ describe('arxivAdapter.planQueries — Sonnet field-prefix sanitization', () => 
     );
     expect(queries).toHaveLength(1);
     expect(stripDateRange(String(queries[0]!.params.search_query))).toBe(
-      'cat:cs.LG+AND+%28ti:real+AND+abs:keyword%29',
+      'cat:cs.LG+AND+%28abs:real+AND+abs:keyword%29',
     );
   });
 
@@ -641,12 +652,14 @@ describe('arxivAdapter.planQueries — Sonnet field-prefix sanitization', () => 
     );
   });
 
-  it('is a no-op for a clean gpt-4o-style keyword (regression guard)', () => {
+  it('is a no-op for a clean gpt-4o-style keyword (regression guard, smart anchor: "multi" generic → abs)', () => {
     // Typical gpt-4o output — clean, no arxiv field prefixes.
     // "multi-touch" is split on hyphens: ["multi", "touch"]
     // Combined with "attribution": ["multi", "touch", "attribution"]
+    // Smart anchor: "multi" is in GENERIC_FIRST_TOKEN_DENY_LIST so
+    // the first token uses abs: rather than ti:.
     expect(searchQueryFor('multi-touch attribution')).toBe(
-      'cat:cs.LG+AND+%28ti:multi+AND+abs:touch+AND+abs:attribution%29',
+      'cat:cs.LG+AND+%28abs:multi+AND+abs:touch+AND+abs:attribution%29',
     );
   });
 
@@ -693,5 +706,256 @@ describe('arxivAdapter interface', () => {
   it('conforms to the SourceAdapter interface (type check)', () => {
     const _typed: SourceAdapter = arxivAdapter;
     expect(_typed).toBe(arxivAdapter);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tier-1: shouldAnchorFirstTokenInTitle (pure helper)
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('shouldAnchorFirstTokenInTitle', () => {
+  it('anchors all-caps acronyms regardless of length (PU, RAG, MCP, AI, ML)', () => {
+    for (const acr of ['PU', 'RAG', 'MCP', 'AI', 'ML', 'LLM']) {
+      expect(shouldAnchorFirstTokenInTitle(acr)).toBe(true);
+    }
+  });
+
+  it('anchors content tokens of 5+ characters (fraud, novel, churn, tabular)', () => {
+    for (const t of ['fraud', 'churn', 'tabular', 'clinical', 'inventory']) {
+      expect(shouldAnchorFirstTokenInTitle(t)).toBe(true);
+    }
+  });
+
+  it('does NOT anchor generic deny-listed words even when 5+ chars (multi, novel, recent)', () => {
+    for (const generic of ['multi', 'novel', 'recent', 'simple', 'general', 'modern']) {
+      expect(shouldAnchorFirstTokenInTitle(generic)).toBe(false);
+    }
+  });
+
+  it('does NOT anchor generic short words (data, real, late, deep)', () => {
+    for (const generic of ['data', 'real', 'late', 'deep', 'fast', 'long', 'wide']) {
+      expect(shouldAnchorFirstTokenInTitle(generic)).toBe(false);
+    }
+  });
+
+  it('does NOT anchor lowercase tokens shorter than 5 chars (the, for, and)', () => {
+    for (const short of ['the', 'for', 'and', 'in', 'of']) {
+      expect(shouldAnchorFirstTokenInTitle(short)).toBe(false);
+    }
+  });
+
+  it('matches deny-list case-insensitively (Multi, NOVEL, MoDeRn)', () => {
+    for (const variant of ['Multi', 'NOVEL', 'MoDeRn']) {
+      expect(shouldAnchorFirstTokenInTitle(variant)).toBe(false);
+    }
+  });
+
+  it('treats 2-char all-caps as acronym but 2-char lowercase as too short', () => {
+    expect(shouldAnchorFirstTokenInTitle('PU')).toBe(true);
+    expect(shouldAnchorFirstTokenInTitle('pu')).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tier-1: title-anchored fallback to abstract-only on zero results
+// ────────────────────────────────────────────────────────────────────────────
+
+const EMPTY_FEED = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>';
+const FEED_WITH_ENTRY = SAMPLE_ARXIV_XML;
+
+describe('arxivAdapter.fetch — Tier-1 title-anchored fallback', () => {
+  afterEach(() => {
+    resetScannerMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('precomputes _fallback_search_query when the keyword would title-anchor', () => {
+    // "fraud detection" → first token "fraud" is anchored (5 chars,
+    // not in deny list) so the planner attaches an abs-only fallback.
+    const queries = arxivAdapter.planQueries(
+      buildPlan({
+        arxiv_categories: ['cs.LG'],
+        arxiv_keywords: ['fraud detection'],
+      }),
+      buildDirective(),
+    );
+    expect(queries).toHaveLength(1);
+    const fallback = queries[0]!.params._fallback_search_query;
+    expect(typeof fallback).toBe('string');
+    expect(String(fallback)).toContain('abs:fraud');
+    expect(String(fallback)).toContain('abs:detection');
+    expect(String(fallback)).not.toContain('ti:');
+  });
+
+  it('does NOT attach a fallback when the primary already uses abs: for the first token', () => {
+    // "multi-touch" → first token "multi" is in deny list, primary
+    // is already abs:multi AND abs:touch — no point retrying the
+    // identical query.
+    const queries = arxivAdapter.planQueries(
+      buildPlan({
+        arxiv_categories: ['cs.LG'],
+        arxiv_keywords: ['multi-touch attribution'],
+      }),
+      buildDirective(),
+    );
+    expect(queries).toHaveLength(1);
+    expect(queries[0]!.params._fallback_search_query).toBeUndefined();
+  });
+
+  it('strips the transport-only _fallback_search_query from the outgoing URL', async () => {
+    let capturedUrl = '';
+    server.use(
+      http.get('http://export.arxiv.org/api/query', ({ request }) => {
+        capturedUrl = request.url;
+        return new HttpResponse(EMPTY_FEED, {
+          headers: { 'content-type': 'application/atom+xml' },
+        });
+      }),
+    );
+    await fetchQueries(
+      [
+        {
+          label: 'q1',
+          params: {
+            search_query: 'cat:cs.LG+AND+ti:fraud',
+            max_results: '100',
+            sortBy: 'submittedDate',
+            sortOrder: 'descending',
+            _fallback_search_query: 'cat:cs.LG+AND+abs:fraud',
+          },
+        },
+      ],
+      { timeoutMs: 10_000 },
+      noSleep,
+    );
+    // The transport-only field MUST never appear in the wire query string.
+    expect(capturedUrl).not.toContain('_fallback_search_query');
+  });
+
+  it('retries with the fallback search_query when the primary returns 0 entries', async () => {
+    const calls: string[] = [];
+    server.use(
+      http.get('http://export.arxiv.org/api/query', ({ request }) => {
+        calls.push(request.url);
+        // First call (the primary, ti:retention) → empty feed.
+        // Second call (fallback, abs:retention) → has entries.
+        if (calls.length === 1) {
+          return new HttpResponse(EMPTY_FEED, {
+            headers: { 'content-type': 'application/atom+xml' },
+          });
+        }
+        return new HttpResponse(FEED_WITH_ENTRY, {
+          headers: { 'content-type': 'application/atom+xml' },
+        });
+      }),
+    );
+    const items = await fetchQueries(
+      [
+        {
+          label: 'q1',
+          params: {
+            search_query: 'cat:cs.LG+AND+%28ti:retention+AND+abs:uplift%29',
+            max_results: '100',
+            sortBy: 'submittedDate',
+            sortOrder: 'descending',
+            _fallback_search_query: 'cat:cs.LG+AND+%28abs:retention+AND+abs:uplift%29',
+          },
+        },
+      ],
+      { timeoutMs: 10_000 },
+      noSleep,
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('ti:retention');
+    expect(calls[1]).toContain('abs:retention');
+    expect(items.length).toBeGreaterThan(0);
+  });
+
+  it('does NOT trigger fallback when the primary returns at least one entry', async () => {
+    const calls: string[] = [];
+    server.use(
+      http.get('http://export.arxiv.org/api/query', ({ request }) => {
+        calls.push(request.url);
+        return new HttpResponse(FEED_WITH_ENTRY, {
+          headers: { 'content-type': 'application/atom+xml' },
+        });
+      }),
+    );
+    await fetchQueries(
+      [
+        {
+          label: 'q1',
+          params: {
+            search_query: 'cat:cs.LG+AND+ti:fraud',
+            max_results: '100',
+            sortBy: 'submittedDate',
+            sortOrder: 'descending',
+            _fallback_search_query: 'cat:cs.LG+AND+abs:fraud',
+          },
+        },
+      ],
+      { timeoutMs: 10_000 },
+      noSleep,
+    );
+    // Primary succeeded → fallback must NOT fire (one HTTP call total).
+    expect(calls).toHaveLength(1);
+  });
+
+  it('does NOT trigger fallback when no _fallback_search_query is attached (deny-listed first token)', async () => {
+    const calls: string[] = [];
+    server.use(
+      http.get('http://export.arxiv.org/api/query', ({ request }) => {
+        calls.push(request.url);
+        return new HttpResponse(EMPTY_FEED, {
+          headers: { 'content-type': 'application/atom+xml' },
+        });
+      }),
+    );
+    await fetchQueries(
+      [
+        {
+          label: 'q1',
+          params: {
+            search_query: 'cat:cs.LG+AND+abs:multi',
+            max_results: '100',
+            sortBy: 'submittedDate',
+            sortOrder: 'descending',
+            // No _fallback_search_query key at all — primary already uses abs:.
+          },
+        },
+      ],
+      { timeoutMs: 10_000 },
+      noSleep,
+    );
+    // No fallback attached → exactly one HTTP call even though primary returned 0.
+    expect(calls).toHaveLength(1);
+  });
+
+  it('preserves partial-success when fallback also returns 0', async () => {
+    server.use(
+      http.get('http://export.arxiv.org/api/query', () => {
+        return new HttpResponse(EMPTY_FEED, {
+          headers: { 'content-type': 'application/atom+xml' },
+        });
+      }),
+    );
+    const items = await fetchQueries(
+      [
+        {
+          label: 'q1',
+          params: {
+            search_query: 'cat:cs.LG+AND+ti:fraud',
+            max_results: '100',
+            sortBy: 'submittedDate',
+            sortOrder: 'descending',
+            _fallback_search_query: 'cat:cs.LG+AND+abs:fraud',
+          },
+        },
+      ],
+      { timeoutMs: 10_000 },
+      noSleep,
+    );
+    // Both attempts returned 0 — no error, just an empty result set.
+    expect(items).toEqual([]);
   });
 });

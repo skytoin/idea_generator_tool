@@ -25,9 +25,20 @@ import { TECH_SCOUT_ADAPTERS } from './adapters';
 import { withTimeout } from '../../../lib/utils/with-timeout';
 import { classifyError } from './classify-error';
 import { logger } from '../../../lib/utils/logger';
+import { models } from '../../../lib/ai/models';
 
 const PER_SOURCE_TIMEOUT_MS = 60_000;
-const MAX_FINAL_SIGNALS = 30;
+
+/**
+ * Cap on the number of signals returned in the final ScannerReport.
+ * Bumped from 30 → 40 on 2026-04-23 once the Hugging Face adapter
+ * landed: with 5 sources contributing distinct signal types
+ * (HN, arxiv, github, reddit, huggingface), holding the cap at 30
+ * was forcing the diversity-friendly mix to compete for too few
+ * slots. 40 lets each source contribute roughly 5-10 signals to the
+ * final pool while keeping the downstream review surface manageable.
+ */
+const MAX_FINAL_SIGNALS = 40;
 
 /**
  * Minimum per-axis scores for post-enrichment signals to survive the
@@ -40,9 +51,9 @@ const MIN_RELEVANCE = 5;
 const MIN_RECENCY = 4;
 
 /**
- * Max signals per source fed into enrichment. At 20 per source × 3 sources
- * that's up to 60 signals passed to the enrichment LLM — bounded cost
- * (~$0.08 at gpt-4o pricing) while guaranteeing every source gets fair
+ * Max signals per source fed into enrichment. At 20 per source × 5 sources
+ * that's up to 100 signals passed to the enrichment LLM — bounded cost
+ * (~$0.13 at gpt-4o pricing) while guaranteeing every source gets fair
  * representation before the final top-N cut. Increased from 15 to 20
  * to accommodate 6 queries per source (v2.0 divergence upgrade).
  */
@@ -50,10 +61,14 @@ const PER_SOURCE_CAP_FOR_ENRICHMENT = 20;
 
 /**
  * Upper bound on the number of signals the enricher will actually process
- * in a single LLM call. Sized above `PER_SOURCE_CAP × len(adapters)` so
- * the enricher never silently truncates the fair interleaving.
+ * in a single LLM call. Sized AT `PER_SOURCE_CAP × len(adapters)` so
+ * the enricher never silently truncates the fair interleaving. Bumped
+ * from 70 → 100 on 2026-04-23 alongside the Hugging Face adapter:
+ * with 5 sources × 20 cap, the prior 70 was clipping ~30 signals
+ * before they ever reached the enricher (silent recall loss). 100
+ * matches the new 5-adapter ceiling exactly.
  */
-const ENRICHMENT_TOP_N = 70;
+const ENRICHMENT_TOP_N = 100;
 
 /**
  * Map from directive target_source aliases to adapter names. The directives
@@ -65,6 +80,8 @@ const SOURCE_ALIAS_TO_ADAPTER_NAME: Record<string, string> = {
   hn: 'hn_algolia',
   arxiv: 'arxiv',
   github: 'github',
+  reddit: 'reddit',
+  huggingface: 'huggingface',
   // 'producthunt' is in the schema enum but intentionally unmapped
   // because no adapter exists yet.
 };
@@ -266,6 +283,7 @@ function assembleReport(args: AssembleArgs): ScannerReport {
     errors: [],
     warnings: args.warnings,
     v2_features_meta: args.v2FeaturesMeta,
+    model_used: models.tech_scout.modelId,
   };
 }
 
@@ -594,6 +612,9 @@ Founder summary: ${narrativeSnippet}`;
  * language, and sets a 6-month timeframe so adapters still produce
  * meaningful queries. In fallback mode all sources share the same
  * keywords since we can't get divergent per-source lists without the LLM.
+ * `reddit_subreddits` is left empty — the Reddit adapter's built-in
+ * profile-agnostic baseline (startups/microsaas/smallbusiness) keeps it
+ * functional even without an LLM-picked domain sub list.
  */
 function buildFallbackPlan(
   directive: ScannerDirectives['tech_scout'],
@@ -605,8 +626,11 @@ function buildFallbackPlan(
     hn_keywords: directive.keywords,
     arxiv_keywords: directive.keywords,
     github_keywords: directive.keywords,
+    reddit_keywords: directive.keywords,
+    huggingface_keywords: directive.keywords,
     arxiv_categories: ['cs.LG', 'cs.AI'],
     github_languages: ['python'],
+    reddit_subreddits: [],
     domain_tags: [],
     timeframe_iso: cutoff.toISOString(),
   };

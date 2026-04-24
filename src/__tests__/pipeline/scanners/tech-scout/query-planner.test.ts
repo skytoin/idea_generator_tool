@@ -3,6 +3,9 @@ import {
   planQueries,
   parseTimeframeToIso,
   enforceAcronymPreservation,
+  sanitizeGithubLanguages,
+  GITHUB_LANGUAGE_ALLOWLIST,
+  GITHUB_LANGUAGE_MAX,
 } from '../../../../pipeline/scanners/tech-scout/query-planner';
 import type { ExpansionResponse } from '../../../../pipeline/prompts/tech-scout-expansion';
 import { setOpenAIResponse, resetOpenAIMock } from '../../../mocks/openai-mock';
@@ -466,8 +469,15 @@ describe('enforceAcronymPreservation', () => {
         'feature store',
         'python tool',
       ],
+      reddit_keywords: [
+        'data collection frustration',
+        'analytics tool complaints',
+        'indie founder tools',
+      ],
+      huggingface_keywords: ['fraud detection', 'tabular forecasting'],
       arxiv_categories: ['cs.LG'],
       github_languages: ['python'],
+      reddit_subreddits: ['datascience', 'SaaS'],
       domain_tags: ['fintech'],
       ...overrides,
     };
@@ -617,5 +627,97 @@ describe('enforceAcronymPreservation', () => {
     // (without the leading/trailing whitespace).
     expect(out.hn_keywords).toContain('MCP');
     expect(out.hn_keywords).not.toContain('  MCP  ');
+  });
+});
+
+describe('sanitizeGithubLanguages', () => {
+  it('returns an empty array when given an empty input', () => {
+    expect(sanitizeGithubLanguages([])).toEqual([]);
+  });
+
+  it('keeps allowlisted languages verbatim (preserves original casing)', () => {
+    const out = sanitizeGithubLanguages(['Python', 'TypeScript', 'Rust']);
+    expect(out).toEqual(['Python', 'TypeScript', 'Rust']);
+  });
+
+  it('drops languages NOT in the allowlist (the Opus hallucination case)', () => {
+    const opus_dump = [
+      'Python',
+      'TypeScript',
+      'Adobe Font',
+      'Common',
+      '5th Gen',
+      '1C Enterprise',
+      'AGS Script',
+      'VBScript',
+      '4D',
+    ];
+    const out = sanitizeGithubLanguages(opus_dump);
+    expect(out).toContain('Python');
+    expect(out).toContain('TypeScript');
+    expect(out).not.toContain('Adobe Font');
+    expect(out).not.toContain('1C Enterprise');
+    expect(out).not.toContain('VBScript');
+    expect(out).not.toContain('4D');
+  });
+
+  it('caps the result at GITHUB_LANGUAGE_MAX entries (preserving order)', () => {
+    // 7 valid allowlisted languages — only the first 5 should survive.
+    const out = sanitizeGithubLanguages([
+      'Python',
+      'TypeScript',
+      'JavaScript',
+      'Go',
+      'Rust',
+      'Julia',
+      'R',
+    ]);
+    expect(out).toHaveLength(GITHUB_LANGUAGE_MAX);
+    expect(out).toEqual(['Python', 'TypeScript', 'JavaScript', 'Go', 'Rust']);
+  });
+
+  it('dedupes case-insensitively while preserving the first-seen casing', () => {
+    const out = sanitizeGithubLanguages(['Python', 'python', 'PYTHON', 'Go']);
+    expect(out).toEqual(['Python', 'Go']);
+  });
+
+  it('matches the allowlist case-insensitively (lowercase input survives)', () => {
+    const out = sanitizeGithubLanguages(['python', 'rust', 'go']);
+    expect(out).toEqual(['python', 'rust', 'go']);
+  });
+
+  it('skips empty strings and whitespace-only entries', () => {
+    const out = sanitizeGithubLanguages(['Python', '', '   ', 'Go']);
+    expect(out).toEqual(['Python', 'Go']);
+  });
+
+  it('still returns valid entries when the input is mostly garbage', () => {
+    const garbage = ['xxx', 'fake', 'nonsense', 'Python', 'totally-not-real', 'Go'];
+    const out = sanitizeGithubLanguages(garbage);
+    expect(out).toEqual(['Python', 'Go']);
+  });
+
+  it('the allowlist itself stays passthrough (every entry survives, capped)', () => {
+    const out = sanitizeGithubLanguages([...GITHUB_LANGUAGE_ALLOWLIST]);
+    expect(out.length).toBe(GITHUB_LANGUAGE_MAX);
+    expect(out).toEqual(GITHUB_LANGUAGE_ALLOWLIST.slice(0, GITHUB_LANGUAGE_MAX));
+  });
+
+  it('exposes a tight cap (GITHUB_LANGUAGE_MAX is 5)', () => {
+    expect(GITHUB_LANGUAGE_MAX).toBe(5);
+  });
+
+  it('the allowlist contains the languages relevant to data/ML/SaaS work', () => {
+    const lower = GITHUB_LANGUAGE_ALLOWLIST.map((l) => l.toLowerCase());
+    for (const must of ['python', 'typescript', 'go', 'rust', 'sql']) {
+      expect(lower).toContain(must);
+    }
+  });
+
+  it('does NOT include the Opus hallucinations in the allowlist', () => {
+    const lower = GITHUB_LANGUAGE_ALLOWLIST.map((l) => l.toLowerCase());
+    for (const garbage of ['adobe font', '5th gen', '1c enterprise', 'ags script']) {
+      expect(lower).not.toContain(garbage);
+    }
   });
 });

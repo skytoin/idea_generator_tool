@@ -143,11 +143,12 @@ function buildGhRepo(
   };
 }
 
-/** Stub all three source scenario env vars and GITHUB_TOKEN. */
+/** Stub every source scenario env var and GITHUB_TOKEN. */
 function stubEnvFor3Scanners() {
   vi.stubEnv('TECH_SCOUT_SCENARIO_HN', 'hn-scanner');
   vi.stubEnv('TECH_SCOUT_SCENARIO_ARXIV', 'arxiv-scanner');
   vi.stubEnv('TECH_SCOUT_SCENARIO_GITHUB', 'github-scanner');
+  vi.stubEnv('TECH_SCOUT_SCENARIO_REDDIT', 'reddit-scanner');
   vi.stubEnv('GITHUB_TOKEN', 'ghp_test');
 }
 
@@ -361,9 +362,7 @@ describe('runTechScout — expansion fallback', () => {
       },
     );
 
-    expect(
-      report.warnings.some((w) => w.startsWith('expansion_fallback:')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.startsWith('expansion_fallback:'))).toBe(true);
     expect(report.source_reports.length).toBe(3);
     expect(['ok', 'partial']).toContain(report.status);
   }, 20_000);
@@ -400,9 +399,7 @@ describe('runTechScout — enrichment failure fallback', () => {
 
     expect(report.status).toBe('ok');
     expect(report.signals.length).toBeGreaterThan(0);
-    expect(
-      report.warnings.some((w) => w.startsWith('enrichment_failed:')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.startsWith('enrichment_failed:'))).toBe(true);
     for (const sig of report.signals) {
       expect(sig.score).toEqual({ novelty: 5, specificity: 5, recency: 5 });
     }

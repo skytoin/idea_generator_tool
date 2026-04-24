@@ -23,12 +23,18 @@ REFINEMENT RULES:
 2. DOUBLE DOWN on "Sparse directions". A sparse direction returned 1-4 signals — that's where the gap opportunities live. For each sparse label, generate 2-3 NEW keyword variants targeting the same underlying idea from a different angle.
 3. REPHRASE "Empty queries" ONCE each. An empty query might mean the WORDING was wrong, OR the gap is real. Try one alternative phrasing per empty label. Do not try the same phrasing twice.
 4. BUILD ON "Top signals from pass 1". These are the highest-relevance items pass 1 found. Generate keywords that chase related angles (same topic, adjacent methodology, next logical question).
-5. KEEP per-source divergence: hn_keywords ≠ arxiv_keywords ≠ github_keywords. Every list 4-8 items.
+5. KEEP per-source divergence: hn_keywords, arxiv_keywords, github_keywords, reddit_keywords, and huggingface_keywords must each carry DIFFERENT terms — zero overlap across the FIVE lists. HN ~4-8 items, arxiv ~4-8 items, github ~4-8 items, reddit ~3-6 items, huggingface ~3-6 items (capability/domain words like "tabular forecasting", "entity resolution", "agent orchestration" — empty array is fine for non-AI-adjacent founders). Also refresh reddit_subreddits if pass 1's sparse/empty signals suggest the community choices missed — you can swap in niche subs that better match an under-hit direction.
 6. PRESERVE acronyms verbatim (MCP stays MCP, never becomes "MC models").
 7. NEVER include anything from directive.exclude.
 
+GITHUB_LANGUAGES — HARD RULE:
+Leave \`github_languages\` as an EMPTY ARRAY \`[]\` by default. Only populate it (with at most 5 entries from the standard set: Python, TypeScript, JavaScript, Go, Rust, Julia, R, SQL, Java, Kotlin, Scala, C++, C#, Ruby, Shell, Swift, PHP) if the founder's notes EXPLICITLY restrict the language. Knowing a language is not the same as requiring it. NEVER emit obscure entries like "Adobe Font", "5th Gen", "1C Enterprise", "AGS Script", or "VBScript" — they will be silently dropped by the post-parse sanitizer, wasting your output budget.
+
 ARXIV KEYWORD FORMAT — HARD RULE:
 Each entry in arxiv_keywords MUST be plain search text only. DO NOT embed any arxiv field qualifier (like \`cat:cs.LG\`, \`cat:stat.ML\`, \`abs:\`, \`ti:\`, \`au:\`) INSIDE a keyword string. The adapter pairs each keyword with a category from arxiv_categories separately — your job is only to supply the plain phrase. CORRECT: \`"tabular foundation model"\`. WRONG: \`"cat:cs.LG tabular foundation model"\` or \`"abs:tabular"\`. The wrong forms corrupt the arxiv search URL and make the whole query fail. If pass 1 hit a saturated \`cat:cs.LG × "foo"\` query, your refinement goes in the keyword (e.g. \`"foo alternative"\`), never the category prefix.
+
+ARXIV RECALL — TOKEN ORDERING + SPARSE-DIRECTION BROADENING:
+The arxiv adapter anchors the FIRST token in title (\`ti:\`) and searches the rest in abstract (\`abs:\`). Lead each phrase with a CONTENT WORD likely to appear in paper titles — a domain noun or canonical method name. Avoid leading with vague modifiers ("multi", "real", "novel", "data", "late", "deep"). When refining a SPARSE arxiv direction (1-4 results), do not just rephrase — BROADEN: drop a niche modifier, swap a hyper-specific term for its parent concept (e.g. \`"PU learning for CRM"\` → \`"semi-supervised classification"\`, \`"late-arriving event imputation"\` → \`"streaming data imputation"\`). The fallback path will retry your phrase without the title anchor automatically, so you don't need to hedge — just lead with the most plausibly-in-title word.
 
 OUTPUT FORMAT: Match the EXPANSION_RESPONSE_SCHEMA exactly (the same schema pass 1 used). Downstream post-processing will apply exclude filtering, acronym preservation, and generic keyword demotion automatically.`;
 }

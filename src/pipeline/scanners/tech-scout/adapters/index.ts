@@ -1,6 +1,8 @@
 import { hnAlgoliaAdapter } from './hn-algolia';
 import { arxivAdapter } from './arxiv';
 import { githubAdapter } from './github';
+import { redditAdapter } from './reddit';
+import { huggingfaceAdapter } from './huggingface';
 import type { SourceAdapter } from '../../types';
 
 /**
@@ -11,6 +13,14 @@ export const TECH_SCOUT_ADAPTERS: readonly SourceAdapter[] = [
   hnAlgoliaAdapter,
   arxivAdapter,
   githubAdapter,
+  redditAdapter,
+  huggingfaceAdapter,
 ];
 
-export { hnAlgoliaAdapter, arxivAdapter, githubAdapter };
+export {
+  hnAlgoliaAdapter,
+  arxivAdapter,
+  githubAdapter,
+  redditAdapter,
+  huggingfaceAdapter,
+};

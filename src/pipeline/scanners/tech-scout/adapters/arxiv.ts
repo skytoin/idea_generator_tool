@@ -98,6 +98,68 @@ const xmlParser = new XMLParser({
  * not matching the tokenized index).
  */
 /**
+ * Generic first-token deny list — words that frequently appear in
+ * keyword phrases without carrying "aboutness". Title-anchoring on
+ * any of these silently kills recall because almost no paper has
+ * "multi" or "real" as the focus of its title; they're modifiers,
+ * not topics. Surfaced from the 2026-04-22 gpt-5.4 run where
+ * `multi-table churn` produced `ti:multi AND abs:table AND abs:churn`
+ * and returned zero papers.
+ *
+ * Compared case-insensitively. Deny-listed first tokens fall back to
+ * `abs:` for that token (the rest of the phrase decides the search).
+ */
+const GENERIC_FIRST_TOKEN_DENY_LIST: ReadonlySet<string> = new Set([
+  'multi',
+  'real',
+  'novel',
+  'data',
+  'fast',
+  'long',
+  'wide',
+  'deep',
+  'large',
+  'small',
+  'good',
+  'best',
+  'late',
+  'early',
+  'high',
+  'low',
+  'new',
+  'old',
+  'simple',
+  'general',
+  'basic',
+  'recent',
+  'modern',
+]);
+
+/**
+ * Decide whether a first-token deserves the strict `ti:` (title)
+ * anchor. The anchor delivers high precision — only papers whose
+ * title is ABOUT this topic match — but at heavy recall cost when
+ * the token is generic or arbitrary. Three rules combine:
+ *
+ *   1. ALL-CAPS acronyms (≥2 chars) ALWAYS anchor — "PU", "RAG",
+ *      "MCP" only carry meaning when present in the paper's title.
+ *   2. Generic modifiers (`GENERIC_FIRST_TOKEN_DENY_LIST`) NEVER
+ *      anchor — they're vague even at 5+ chars.
+ *   3. Otherwise, anchor only if the token is ≥5 chars (specific
+ *      enough to plausibly be a paper's topic).
+ *
+ * The 5-char threshold is empirically chosen so canonical research
+ * tokens like "fraud", "novel" (already in deny list), "tabular"
+ * keep their anchor while short modifiers like "AI" (caught by
+ * acronym rule) and "data" (caught by deny list) are exempted.
+ */
+export function shouldAnchorFirstTokenInTitle(token: string): boolean {
+  if (GENERIC_FIRST_TOKEN_DENY_LIST.has(token.toLowerCase())) return false;
+  if (/^[A-Z]{2,}$/.test(token)) return true;
+  return token.length >= 5;
+}
+
+/**
  * Build a title+abstract anchored search clause. The FIRST token is
  * searched in `ti:` (title) so only papers whose title is ABOUT this
  * topic match — not papers that incidentally mention the word in a
@@ -106,16 +168,37 @@ const xmlParser = new XMLParser({
  * parser doesn't treat `-` as NOT. Parentheses are percent-encoded
  * per arxiv API docs (%28 and %29, NOT literal parens).
  *
- * Single-token: `ti:token` (strictest).
- * Multi-token: `%28ti:first+AND+abs:second%29` (title-anchored).
+ * Title anchor is applied SMARTLY (`shouldAnchorFirstTokenInTitle`):
+ * generic first tokens like "multi" or "data" stay in `abs:` rather
+ * than crushing recall with a useless title constraint.
+ *
+ * Single-token: `ti:token` if token deserves anchor, else `abs:token`.
+ * Multi-token: `%28ti:first+AND+abs:rest%29` if anchored, else
+ *              `%28abs:first+AND+abs:rest%29`.
  */
 function buildSearchClause(tokens: readonly string[]): string {
   const expanded = tokens.flatMap((t) => t.split('-').filter((s) => s.length > 0));
   if (expanded.length === 0) return '';
-  if (expanded.length === 1) return `ti:${encodeURIComponent(expanded[0]!)}`;
-  const titlePart = `ti:${encodeURIComponent(expanded[0]!)}`;
+  const firstField = shouldAnchorFirstTokenInTitle(expanded[0]!) ? 'ti' : 'abs';
+  if (expanded.length === 1) return `${firstField}:${encodeURIComponent(expanded[0]!)}`;
+  const firstPart = `${firstField}:${encodeURIComponent(expanded[0]!)}`;
   const absParts = expanded.slice(1).map((t) => `abs:${encodeURIComponent(t)}`);
-  return `%28${[titlePart, ...absParts].join('+AND+')}%29`;
+  return `%28${[firstPart, ...absParts].join('+AND+')}%29`;
+}
+
+/**
+ * Build the abstract-only fallback variant of a search clause —
+ * EVERY token uses `abs:` (no title anchor). Used as the second
+ * attempt when the primary title-anchored query returns zero
+ * entries. Same hyphen-expansion and percent-encoding rules as
+ * `buildSearchClause` so URL semantics stay identical.
+ */
+function buildAbsOnlySearchClause(tokens: readonly string[]): string {
+  const expanded = tokens.flatMap((t) => t.split('-').filter((s) => s.length > 0));
+  if (expanded.length === 0) return '';
+  const parts = expanded.map((t) => `abs:${encodeURIComponent(t)}`);
+  if (parts.length === 1) return parts[0]!;
+  return `%28${parts.join('+AND+')}%29`;
 }
 
 /**
@@ -167,14 +250,28 @@ function planQueries(
     const cat = cats[i % cats.length]!;
     const labelKw = tokens.join(' ');
     const searchClause = buildSearchClause(tokens);
+    const absOnlyClause = buildAbsOnlySearchClause(tokens);
+    const fallbackQuery = `cat:${cat}+AND+${absOnlyClause}+AND+${dateRange}`;
+    const primaryQuery = `cat:${cat}+AND+${searchClause}+AND+${dateRange}`;
+    // The transport-only `_fallback_search_query` carries the
+    // abstract-only variant alongside the primary. The fetch loop
+    // re-issues this query if the primary returns 0 entries — title
+    // anchoring is precise but kills recall when the first token is
+    // a niche term that simply doesn't appear in many paper titles.
+    // Skipping the fallback when primary === fallback (no anchor was
+    // applied) avoids wasting a request retrying the identical URL.
+    const params: Record<string, unknown> = {
+      search_query: primaryQuery,
+      max_results: '100',
+      sortBy: 'submittedDate',
+      sortOrder: 'descending',
+    };
+    if (primaryQuery !== fallbackQuery) {
+      params._fallback_search_query = fallbackQuery;
+    }
     return {
       label: `arxiv: cat:${cat} × "${labelKw}"`,
-      params: {
-        search_query: `cat:${cat}+AND+${searchClause}+AND+${dateRange}`,
-        max_results: '20',
-        sortBy: 'submittedDate',
-        sortOrder: 'descending',
-      },
+      params,
     };
   });
 }
@@ -218,13 +315,34 @@ export async function fetchQueries(
     if (!q) continue;
     const url = buildArxivUrl(q.params);
     try {
-      const res = await fetch(url, { signal: opts.signal, headers });
-      if (!res.ok) throw new Error(`arxiv ${res.status}`);
-      const xml = await res.text();
-      const parsed = xmlParser.parse(xml) as { feed?: { entry?: unknown } };
-      const entries = toArray(parsed.feed?.entry);
-      for (const entry of entries) {
-        out.push({ source: 'arxiv', data: entry });
+      const entries = await fetchOneArxivQuery(url, headers, opts.signal);
+      // Title-anchored fallback: if the primary returned 0 entries
+      // AND the planner attached an abs-only fallback variant, retry
+      // once IMMEDIATELY (no sleep — the primary fetch already took
+      // hundreds of ms and the next inter-query ARXIV_SLEEP_MS re-
+      // establishes the polite average rate). Adds at most ~50ms +
+      // one extra request per zero-returning query, keeping the
+      // adapter well inside its 60s per-source budget. The retry
+      // uses the SAME error-tracking logic — a failed retry doesn't
+      // double-count.
+      if (entries.length === 0 && q.params._fallback_search_query) {
+        const fallbackParams = {
+          ...q.params,
+          search_query: String(q.params._fallback_search_query),
+        };
+        const fallbackUrl = buildArxivUrl(fallbackParams);
+        const fallbackEntries = await fetchOneArxivQuery(
+          fallbackUrl,
+          headers,
+          opts.signal,
+        );
+        for (const entry of fallbackEntries) {
+          out.push({ source: 'arxiv', data: entry });
+        }
+      } else {
+        for (const entry of entries) {
+          out.push({ source: 'arxiv', data: entry });
+        }
       }
     } catch (e) {
       errors.push(e instanceof Error ? e : new Error(String(e)));
@@ -246,12 +364,35 @@ export async function fetchQueries(
  * Serialize arxiv params into a query string directly. arxiv uses
  * non-standard URL encoding (literal `+` for AND, pre-encoded `%22` for
  * quoted phrases) so we bypass URL.searchParams which would double-encode.
+ *
+ * Transport-only fields starting with `_` are stripped (e.g. the
+ * `_fallback_search_query` carrier the planner attaches for the
+ * abs-only retry). They must never reach the wire.
  */
 function buildArxivUrl(params: Record<string, unknown>): string {
   const qs = Object.entries(params)
+    .filter(([k]) => !k.startsWith('_'))
     .map(([k, v]) => `${k}=${v}`)
     .join('&');
   return `${ARXIV_QUERY_URL}?${qs}`;
+}
+
+/**
+ * Fetch ONE arxiv URL, parse its Atom feed, and return the entries
+ * array. Pulled out of the main loop so the title-anchored fallback
+ * can call the same fetch+parse path without duplicating logic.
+ * Throws on HTTP error so the caller's error tracker captures it.
+ */
+async function fetchOneArxivQuery(
+  url: string,
+  headers: Record<string, string>,
+  signal: FetchOpts['signal'],
+): Promise<unknown[]> {
+  const res = await fetch(url, { signal, headers });
+  if (!res.ok) throw new Error(`arxiv ${res.status}`);
+  const xml = await res.text();
+  const parsed = xmlParser.parse(xml) as { feed?: { entry?: unknown } };
+  return toArray(parsed.feed?.entry);
 }
 
 /**

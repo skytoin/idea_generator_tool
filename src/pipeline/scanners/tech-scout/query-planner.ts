@@ -85,6 +85,8 @@ function filterExcludes(
     hn_keywords: strip(response.hn_keywords),
     arxiv_keywords: strip(response.arxiv_keywords),
     github_keywords: strip(response.github_keywords),
+    reddit_keywords: strip(response.reddit_keywords),
+    huggingface_keywords: strip(response.huggingface_keywords),
   };
 }
 
@@ -127,6 +129,79 @@ function containsAsWord(haystack: string, acronym: string): boolean {
  * rule asking for verbatim preservation. Prompt rules alone are not
  * reliable — this enforcer makes preservation a hard guarantee.
  */
+/**
+ * Allowlist of GitHub language strings the scanner will keep. Any
+ * language NOT in this set is dropped by `sanitizeGithubLanguages`
+ * because the LLM (especially Opus on the pass-2 refine call) tends
+ * to hallucinate exotic entries like "Adobe Font", "5th Gen", or
+ * "1C Enterprise" that are useless for surfacing relevant repos.
+ *
+ * The set covers the universe of languages where data / ML / SaaS /
+ * web / mobile / systems repos actually live — broad enough that no
+ * realistic founder is excluded, narrow enough to drop nonsense.
+ * Comparison is case-insensitive (we lowercase both sides at match
+ * time) so the LLM's casing variations ("Python", "python", "PYTHON")
+ * all collapse to the canonical form.
+ */
+export const GITHUB_LANGUAGE_ALLOWLIST: readonly string[] = [
+  'python',
+  'typescript',
+  'javascript',
+  'go',
+  'rust',
+  'julia',
+  'r',
+  'sql',
+  'java',
+  'kotlin',
+  'scala',
+  'c++',
+  'c#',
+  'ruby',
+  'shell',
+  'swift',
+  'php',
+  'c',
+  'haskell',
+  'elixir',
+] as const;
+
+/** Cap on the number of github_languages kept per plan. */
+export const GITHUB_LANGUAGE_MAX = 5;
+
+/**
+ * Drop hallucinated github_languages and cap the survivors. Two-stage
+ * filter: first reject anything not in `GITHUB_LANGUAGE_ALLOWLIST`
+ * (case-insensitive), then keep at most `GITHUB_LANGUAGE_MAX` entries
+ * preserving the LLM's original ordering. Dedupes case-insensitively
+ * while keeping the first-seen casing — so a list like
+ * `["Python", "python", "PYTHON"]` collapses to `["Python"]` rather
+ * than burning three slots on the same language.
+ *
+ * Why this exists: the pass-2 refine LLM (Opus) emits things like
+ * `["Python", "TypeScript", "1C Enterprise", "Adobe Font", "AGS Script", ...]`
+ * — a 39-item dump that wastes downstream query budget on languages no
+ * data/ML repo is ever written in. Filtering at the planner layer is
+ * more reliable than asking the prompt to behave because it works
+ * for any model regardless of how well it follows numerical instructions.
+ */
+export function sanitizeGithubLanguages(langs: readonly string[]): string[] {
+  const allowed = new Set(GITHUB_LANGUAGE_ALLOWLIST.map((l) => l.toLowerCase()));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of langs) {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    const key = trimmed.toLowerCase();
+    if (!allowed.has(key)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length >= GITHUB_LANGUAGE_MAX) break;
+  }
+  return out;
+}
+
 export function enforceAcronymPreservation(
   response: ExpansionResponse,
   directiveKeywords: readonly string[],
@@ -137,6 +212,8 @@ export function enforceAcronymPreservation(
     ...response.hn_keywords,
     ...response.arxiv_keywords,
     ...response.github_keywords,
+    ...response.reddit_keywords,
+    ...response.huggingface_keywords,
   ].join(' ');
   const missing = acronyms.filter((ac) => !containsAsWord(haystack, ac));
   if (missing.length === 0) return response;
@@ -145,6 +222,8 @@ export function enforceAcronymPreservation(
     hn_keywords: [...response.hn_keywords, ...missing],
     arxiv_keywords: [...response.arxiv_keywords, ...missing],
     github_keywords: [...response.github_keywords, ...missing],
+    reddit_keywords: [...response.reddit_keywords, ...missing],
+    huggingface_keywords: [...response.huggingface_keywords, ...missing],
   };
 }
 
@@ -216,6 +295,8 @@ function demoteGenericKeywords(response: ExpansionResponse): ExpansionResponse {
     hn_keywords: demoteInList(response.hn_keywords),
     arxiv_keywords: demoteInList(response.arxiv_keywords),
     github_keywords: demoteInList(response.github_keywords),
+    reddit_keywords: demoteInList(response.reddit_keywords),
+    huggingface_keywords: demoteInList(response.huggingface_keywords),
   };
 }
 
@@ -257,8 +338,11 @@ export async function planQueries(
       hn_keywords: reordered.hn_keywords,
       arxiv_keywords: reordered.arxiv_keywords,
       github_keywords: reordered.github_keywords,
+      reddit_keywords: reordered.reddit_keywords,
+      huggingface_keywords: reordered.huggingface_keywords,
       arxiv_categories: reordered.arxiv_categories,
-      github_languages: reordered.github_languages,
+      github_languages: sanitizeGithubLanguages(reordered.github_languages),
+      reddit_subreddits: reordered.reddit_subreddits,
       domain_tags: reordered.domain_tags,
       timeframe_iso: parseTimeframeToIso(directive.timeframe, clock()),
     });

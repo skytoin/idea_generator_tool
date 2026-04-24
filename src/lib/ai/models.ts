@@ -17,13 +17,22 @@ export const providers = {
 /**
  * Resolve the tech_scout model based on the `TECH_SCOUT_MODEL` env
  * variable. Default is OpenAI gpt-4o (the historical baseline). Set
- * `TECH_SCOUT_MODEL=sonnet` to swap in Anthropic Claude Sonnet 4.6
+ * `TECH_SCOUT_MODEL=<alias>` to swap in any other supported model
  * for every tech_scout LLM call — that's expansion planning,
  * enrichment, skill-remix, adjacent-worlds, and the pass-2 refine
  * planner. Toggling via env means the test suite (which mocks
  * OpenAI endpoints) stays green without needing to also mock
  * Anthropic, while production runs can flip the switch with a
  * single env change.
+ *
+ * Recognized aliases (case-insensitive):
+ *   opus          → claude-opus-4-6
+ *   sonnet        → claude-sonnet-4-6
+ *   gpt-5.4       → gpt-5.4 (current OpenAI flagship, April 2026)
+ *   gpt-5.4-mini  → gpt-5.4-mini (lower-latency, lower-cost variant)
+ *   gpt-5.4-nano  → gpt-5.4-nano (cheapest, fastest variant)
+ *   gpt-4o        → gpt-4o (legacy default, retiring)
+ *   anything else → falls through to gpt-4o default
  *
  * Why centralize this: the tech_scout role is used by five
  * different modules. Picking the model in one place keeps the
@@ -36,6 +45,15 @@ function resolveTechScoutModel() {
   }
   if (choice === 'sonnet' || choice === 'claude-sonnet-4-6') {
     return anthropic('claude-sonnet-4-6');
+  }
+  if (choice === 'gpt-5.4' || choice === 'gpt5.4') {
+    return openai('gpt-5.4');
+  }
+  if (choice === 'gpt-5.4-mini' || choice === 'gpt5.4-mini') {
+    return openai('gpt-5.4-mini');
+  }
+  if (choice === 'gpt-5.4-nano' || choice === 'gpt5.4-nano') {
+    return openai('gpt-5.4-nano');
   }
   return openai('gpt-4o');
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { classifyError } from '../../../../pipeline/scanners/tech-scout/classify-error';
 import { TimeoutError } from '../../../../lib/utils/with-timeout';
 import { GithubDeniedError } from '../../../../pipeline/scanners/tech-scout/adapters/github';
+import { RedditDeniedError } from '../../../../pipeline/scanners/tech-scout/adapters/reddit';
 
 describe('classifyError', () => {
   it('classifies TimeoutError as timeout', () => {
@@ -12,14 +13,24 @@ describe('classifyError', () => {
     expect(classifyError(new GithubDeniedError(403))).toBe('denied');
   });
 
+  it('classifies RedditDeniedError(429) as denied', () => {
+    expect(classifyError(new RedditDeniedError(429))).toBe('denied');
+  });
+
+  it('classifies RedditDeniedError(403) as denied', () => {
+    expect(classifyError(new RedditDeniedError(403))).toBe('denied');
+  });
+
+  it('classifies RedditDeniedError(401) as denied', () => {
+    expect(classifyError(new RedditDeniedError(401))).toBe('denied');
+  });
+
   it('classifies unknown github error (e.g. 422) as failed', () => {
     expect(classifyError(new Error('github 422'))).toBe('failed');
   });
 
   it('classifies "rate limit" message as denied', () => {
-    expect(classifyError(new Error('rate limit hit, try again later'))).toBe(
-      'denied',
-    );
+    expect(classifyError(new Error('rate limit hit, try again later'))).toBe('denied');
   });
 
   it('classifies "429" message as denied', () => {
@@ -45,9 +56,7 @@ describe('classifyError', () => {
   });
 
   it('classifies "denied" message text as denied', () => {
-    expect(classifyError(new Error('access denied by upstream'))).toBe(
-      'denied',
-    );
+    expect(classifyError(new Error('access denied by upstream'))).toBe('denied');
   });
 
   it('classifies a plain Error with unrelated message as failed', () => {

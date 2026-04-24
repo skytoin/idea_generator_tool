@@ -12,7 +12,9 @@ const scannerHint = z.object({
  */
 export const SCANNER_DIRECTIVES_SCHEMA = z.object({
   tech_scout: scannerHint.extend({
-    target_sources: z.array(z.enum(['hn', 'arxiv', 'github', 'producthunt'])),
+    target_sources: z.array(
+      z.enum(['hn', 'arxiv', 'github', 'reddit', 'huggingface', 'producthunt']),
+    ),
     timeframe: z.string(),
   }),
   pain_scanner: scannerHint.extend({

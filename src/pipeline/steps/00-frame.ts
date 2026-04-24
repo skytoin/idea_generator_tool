@@ -181,6 +181,7 @@ function buildScannerCrashReport(message: string, generatedAt: string): ScannerR
     generated_at: generatedAt,
     errors: [{ kind: 'scanner_crashed', message }],
     warnings: [],
+    model_used: null,
   };
 }
 

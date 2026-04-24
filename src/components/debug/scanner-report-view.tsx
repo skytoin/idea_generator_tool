@@ -53,6 +53,12 @@ function ScannerHeader({ report }: { report: ScannerReport }): ReactElement {
         generated_at <code>{report.generated_at}</code> · elapsed_ms{' '}
         <code>{report.elapsed_ms}</code> · cost_usd{' '}
         <code>${report.cost_usd.toFixed(4)}</code>
+        {report.model_used != null && (
+          <>
+            {' '}
+            · model <code data-testid="scanner-model-used">{report.model_used}</code>
+          </>
+        )}
       </p>
     </div>
   );

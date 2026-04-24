@@ -80,8 +80,10 @@ function buildExpansionJson(
     hn_keywords: string[];
     arxiv_keywords: string[];
     github_keywords: string[];
+    reddit_keywords: string[];
     arxiv_categories: string[];
     github_languages: string[];
+    reddit_subreddits: string[];
   }> = {},
 ): string {
   return JSON.stringify({
@@ -103,8 +105,14 @@ function buildExpansionJson(
       'feature store',
       'python tool',
     ],
+    reddit_keywords: overrides.reddit_keywords ?? [
+      'data collection frustration',
+      'analytics tool alternatives',
+      'indie founder complaints',
+    ],
     arxiv_categories: overrides.arxiv_categories ?? ['cs.LG'],
     github_languages: overrides.github_languages ?? ['python'],
+    reddit_subreddits: overrides.reddit_subreddits ?? ['datascience', 'SaaS'],
     domain_tags: ['fintech'],
   });
 }
@@ -230,15 +238,10 @@ describe('runTechScout — bug 2 wiring: timeframe filter drops stale signals', 
     });
     stubEnvFor3Scanners();
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: FIXED_CLOCK,
-        scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
-      },
-    );
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: FIXED_CLOCK,
+      scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
+    });
 
     expect(report.status).toBe('ok');
     const titles = report.signals.map((s) => s.title);
@@ -286,21 +289,14 @@ describe('runTechScout — bug 4 wiring: quality floor drops low-relevance/recen
     });
     stubEnvFor3Scanners();
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: FIXED_CLOCK,
-        scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
-      },
-    );
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: FIXED_CLOCK,
+      scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
+    });
 
     // All signals failed the quality floor → empty output + warning
     expect(report.signals).toHaveLength(0);
-    expect(
-      report.warnings.some((w) => w.startsWith('quality_floor:')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.startsWith('quality_floor:'))).toBe(true);
   }, 20_000);
 
   it('drops enriched signals below recency=4 but keeps the high-recency ones', async () => {
@@ -360,24 +356,17 @@ describe('runTechScout — bug 4 wiring: quality floor drops low-relevance/recen
     });
     stubEnvFor3Scanners();
 
-    const report = await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: FIXED_CLOCK,
-        scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
-      },
-    );
+    const report = await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: FIXED_CLOCK,
+      scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
+    });
 
     // Only the high-recency, high-relevance signal should survive.
     expect(report.signals).toHaveLength(1);
     const titles = report.signals.map((s) => s.title);
     expect(titles).not.toContain('drop');
     expect(titles).not.toContain('drop2');
-    expect(
-      report.warnings.some((w) => w.includes('dropped 2 signals')),
-    ).toBe(true);
+    expect(report.warnings.some((w) => w.includes('dropped 2 signals'))).toBe(true);
   }, 20_000);
 });
 
@@ -390,7 +379,12 @@ describe('runTechScout — bug 3 wiring: acronym preservation injects MCP into t
     setOpenAIResponse('bf-expansion', {
       content: buildExpansionJson({
         hn_keywords: ['saas launches', 'consumer tools', 'product hunts', 'analytics'],
-        arxiv_keywords: ['feature engineering', 'data fusion', 'transfer learning', 'retrieval'],
+        arxiv_keywords: [
+          'feature engineering',
+          'data fusion',
+          'transfer learning',
+          'retrieval',
+        ],
         github_keywords: ['web scraping', 'aggregation', 'feature store', 'cli wrapper'],
       }),
     });
@@ -437,7 +431,12 @@ describe('runTechScout — bug 3 wiring: acronym preservation injects MCP into t
   it('does NOT re-inject MCP when the LLM response already preserved it', async () => {
     setOpenAIResponse('bf-expansion', {
       content: buildExpansionJson({
-        hn_keywords: ['MCP server launches', 'consumer tools', 'product hunts', 'analytics'],
+        hn_keywords: [
+          'MCP server launches',
+          'consumer tools',
+          'product hunts',
+          'analytics',
+        ],
       }),
     });
     setOpenAIResponse('bf-enrich', { content: buildEnrichmentJson(1) });
@@ -510,15 +509,10 @@ describe('runTechScout — bug 1 wiring: GitHub queries sent unquoted', () => {
     setArxivResponse('bf-arxiv', '<feed xmlns="http://www.w3.org/2005/Atom"></feed>');
     stubEnvFor3Scanners();
 
-    await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: FIXED_CLOCK,
-        scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
-      },
-    );
+    await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: FIXED_CLOCK,
+      scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
+    });
 
     expect(capturedUrls.length).toBeGreaterThan(0);
     for (const url of capturedUrls) {
@@ -544,15 +538,10 @@ describe('runTechScout — bug 1 wiring: GitHub queries sent unquoted', () => {
     setArxivResponse('bf-arxiv', '<feed xmlns="http://www.w3.org/2005/Atom"></feed>');
     stubEnvFor3Scanners();
 
-    await runTechScout(
-      buildDirective(),
-      buildProfile(),
-      'narrative',
-      {
-        clock: FIXED_CLOCK,
-        scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
-      },
-    );
+    await runTechScout(buildDirective(), buildProfile(), 'narrative', {
+      clock: FIXED_CLOCK,
+      scenarios: { expansion: 'bf-expansion', enrichment: 'bf-enrich' },
+    });
 
     expect(capturedUrls.length).toBeGreaterThan(0);
     for (const url of capturedUrls) {

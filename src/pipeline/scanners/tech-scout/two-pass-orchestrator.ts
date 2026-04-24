@@ -21,6 +21,7 @@ import {
 import { summarizeFirstPass } from './first-pass-summary';
 import { refinePlan } from './refine-planner';
 import { dedupeSignals, keepTop } from './post-process';
+import { models } from '../../../lib/ai/models';
 
 /**
  * Decide whether pass 2 is worth running. Requires at least ONE
@@ -171,14 +172,11 @@ function assembleTwoPassReport(args: AssembleTwoPassArgs): ScannerReport {
   const totalRaw =
     args.pass1.prefilter.totalRaw + (args.pass2?.outcome.prefilter.totalRaw ?? 0);
   const afterDedupe =
-    args.pass1.prefilter.afterDedupe +
-    (args.pass2?.outcome.prefilter.afterDedupe ?? 0);
+    args.pass1.prefilter.afterDedupe + (args.pass2?.outcome.prefilter.afterDedupe ?? 0);
   const afterExclude =
-    args.pass1.prefilter.afterExclude +
-    (args.pass2?.outcome.prefilter.afterExclude ?? 0);
+    args.pass1.prefilter.afterExclude + (args.pass2?.outcome.prefilter.afterExclude ?? 0);
   const cost =
-    args.pass1.enrichment.cost_usd +
-    (args.pass2?.outcome.enrichment.cost_usd ?? 0);
+    args.pass1.enrichment.cost_usd + (args.pass2?.outcome.enrichment.cost_usd ?? 0);
 
   const meta: TwoPassMeta = {
     pass1_signal_count: args.pass1.qualityFloored.length,
@@ -216,6 +214,7 @@ function assembleTwoPassReport(args: AssembleTwoPassArgs): ScannerReport {
     warnings: args.warnings,
     two_pass_meta: meta,
     v2_features_meta: v2Meta,
+    model_used: models.tech_scout.modelId,
   };
   logScanComplete(report);
   return report;
@@ -258,10 +257,10 @@ function combineSourceReports(
 }
 
 /** Merge two SourceReports for the same adapter (pass 1 + pass 2). */
-function mergeOneSourceReport(a: SourceReport, b: SourceReport): SourceReport {
+export function mergeOneSourceReport(a: SourceReport, b: SourceReport): SourceReport {
   return {
     name: a.name,
-    status: worstStatus(a.status, b.status),
+    status: mergedStatus(a, b),
     signals_count: a.signals_count + b.signals_count,
     queries_ran: [...a.queries_ran, ...b.queries_ran],
     queries_with_zero_results: [
@@ -272,6 +271,44 @@ function mergeOneSourceReport(a: SourceReport, b: SourceReport): SourceReport {
     elapsed_ms: a.elapsed_ms + b.elapsed_ms,
     cost_usd: a.cost_usd + b.cost_usd,
   };
+}
+
+/**
+ * Pick the merged source status based on whether ANY pass produced
+ * signals. The naive "always take the worst status" rule fires a
+ * latent bug when one pass returns rows and the other returns zero:
+ * the merged report ends up with `signals_count > 0` but
+ * `status === 'ok_empty'` (or `timeout`/`denied`/`failed`), which
+ * directly contradicts the SOURCE_STATUS contract that
+ * `ok_empty ⟺ signals_count === 0`. The contradiction first
+ * surfaced in the 2026-04-22 gpt-5.4 run where pass 2's narrower
+ * arxiv queries returned nothing — pass 1's 25 signals were merged
+ * with pass 2's `ok_empty`, producing the misleading "empty 25 sig"
+ * badge in the debug view.
+ *
+ * Rule:
+ *   - If the merged signals_count > 0, the source successfully
+ *     contributed at least once → status is `ok`. Per-pass error
+ *     detail still lives in `queries_ran` and `warnings`, so we don't
+ *     lose visibility into which pass broke.
+ *   - If neither pass contributed signals, surface the worst status
+ *     so the user sees the real failure mode (timeout/denied/failed
+ *     beats ok_empty so the cause-of-emptiness is visible).
+ *
+ * This mirrors how scanner-level `computeStatus` already treats `ok`
+ * and `ok_empty` as equivalent successes.
+ */
+function mergedStatus(a: SourceReport, b: SourceReport): SourceReport['status'] {
+  const sumSignals = a.signals_count + b.signals_count;
+  if (sumSignals > 0) {
+    if (a.status === 'ok' || b.status === 'ok') return 'ok';
+    // No 'ok' on either side but signals exist — degenerate case
+    // (would only happen if a future change emits 'ok_empty' alongside
+    // a positive signals_count). Fall through to the worst-status
+    // rule so the report still reflects the most pessimistic source.
+    return worstStatus(a.status, b.status);
+  }
+  return worstStatus(a.status, b.status);
 }
 
 /** Rank SourceReport statuses so the aggregate picks the worst one. */

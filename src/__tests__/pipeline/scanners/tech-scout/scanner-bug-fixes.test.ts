@@ -110,6 +110,7 @@ function buildExpansionJson(
       'analytics tool alternatives',
       'indie founder complaints',
     ],
+    huggingface_keywords: [],
     arxiv_categories: overrides.arxiv_categories ?? ['cs.LG'],
     github_languages: overrides.github_languages ?? ['python'],
     reddit_subreddits: overrides.reddit_subreddits ?? ['datascience', 'SaaS'],

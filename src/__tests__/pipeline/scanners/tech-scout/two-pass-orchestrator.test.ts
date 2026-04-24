@@ -90,6 +90,7 @@ function buildExpansionJson(
       'chargeback frustration',
       'anomaly tool alternatives',
     ],
+    huggingface_keywords: [],
     arxiv_categories: ['cs.LG'],
     github_languages: ['python'],
     reddit_subreddits: overrides.reddit_subreddits ?? ['datascience', 'SaaS'],

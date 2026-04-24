@@ -40,12 +40,30 @@ export type ExpansionResponse = z.infer<typeof EXPANSION_RESPONSE_SCHEMA>;
  * EXPANSION_RESPONSE_SCHEMA are re-applied in the planner's
  * post-parse safeParse step.
  */
+/**
+ * WIRE schema sent to `generateObject`. EVERY field MUST be
+ * required — no `optional()`, no `default()`, no unions with
+ * undefined. OpenAI's strict `response_format` compiles this Zod
+ * schema into a JSON Schema and demands that `required` lists every
+ * property in `properties`. Any missing entry triggers a hard
+ * `response_format schema_invalid` error before the LLM generates,
+ * which the pipeline then degrades into the buildFallbackPlan path.
+ *
+ * The 2026-04-24 regression: an earlier version marked
+ * `huggingface_keywords` as `optional().default([])` to ease test
+ * migration. That single modifier caused both expansion AND refine
+ * LLM calls to fail (they share this schema), producing a run where
+ * every source searched the same 6 bland directive keywords
+ * ("SAAS", "machine learning", "data collection", ...) and Pass 2
+ * never ran. Documented in the tech-scout-expansion.test.ts
+ * regression block.
+ */
 export const EXPANSION_WIRE_SCHEMA = z.object({
   hn_keywords: z.array(z.string()),
   arxiv_keywords: z.array(z.string()),
   github_keywords: z.array(z.string()),
   reddit_keywords: z.array(z.string()),
-  huggingface_keywords: z.array(z.string()).optional().default([]),
+  huggingface_keywords: z.array(z.string()),
   arxiv_categories: z.array(z.string()),
   github_languages: z.array(z.string()),
   reddit_subreddits: z.array(z.string()),

@@ -9,7 +9,7 @@ import type {
 } from '../../../lib/types/scanner-report';
 import type { ProblemHunts } from '../../../lib/types/problem-hunt';
 import type { AdjacentWorlds } from '../../../lib/types/adjacent-world';
-import { planQueries as llmPlanQueries } from './query-planner';
+import { planQueries as llmPlanQueries, GENERIC_KEYWORDS } from './query-planner';
 import { enrichSignals } from './enricher';
 import { generateProblemHunts } from './skill-remix';
 import { generateAdjacentWorlds } from './adjacent-worlds';
@@ -616,22 +616,48 @@ Founder summary: ${narrativeSnippet}`;
  * profile-agnostic baseline (startups/microsaas/smallbusiness) keeps it
  * functional even without an LLM-picked domain sub list.
  */
-function buildFallbackPlan(
+/**
+ * Build a degraded `ExpandedQueryPlan` when the LLM expansion step
+ * fails. We prefer specific directive keywords ("tabular forecasting"
+ * over "saas", "churn prediction" over "machine learning") by
+ * filtering out anything in the shared `GENERIC_KEYWORDS` set, then
+ * capping to the first 5 survivors per source. If every directive
+ * keyword is generic, we fall back to the raw list as a last-resort
+ * so the adapters have SOMETHING to run.
+ *
+ * `domain_tags` is populated from the non-generic slice so the
+ * Hugging Face adapter's `pickKeywordsForHf` helper has useful
+ * fallback values (otherwise HF searches for "saas" literally and
+ * returns ~0 hits). `reddit_subreddits` stays empty because the
+ * Reddit adapter always merges in the startup-universal baseline.
+ *
+ * This path fires rarely in practice — only when the expansion LLM
+ * itself errors (schema rejection, network timeout). The 2026-04-24
+ * regression where every source searched the same 6 bland words
+ * originated here because the old version cloned directive.keywords
+ * verbatim to all five per-source lists, exposing the fallback's
+ * quality as the scanner's floor.
+ */
+export function buildFallbackPlan(
   directive: ScannerDirectives['tech_scout'],
   now: Date,
 ): ExpandedQueryPlan {
   const cutoff = new Date(now);
   cutoff.setUTCMonth(cutoff.getUTCMonth() - 6);
+  const specific = directive.keywords.filter(
+    (kw) => !GENERIC_KEYWORDS.has(kw.toLowerCase().trim()),
+  );
+  const chosen = (specific.length > 0 ? specific : directive.keywords).slice(0, 5);
   return {
-    hn_keywords: directive.keywords,
-    arxiv_keywords: directive.keywords,
-    github_keywords: directive.keywords,
-    reddit_keywords: directive.keywords,
-    huggingface_keywords: directive.keywords,
+    hn_keywords: chosen,
+    arxiv_keywords: chosen,
+    github_keywords: chosen,
+    reddit_keywords: chosen,
+    huggingface_keywords: chosen,
     arxiv_categories: ['cs.LG', 'cs.AI'],
-    github_languages: ['python'],
+    github_languages: [],
     reddit_subreddits: [],
-    domain_tags: [],
+    domain_tags: chosen,
     timeframe_iso: cutoff.toISOString(),
   };
 }

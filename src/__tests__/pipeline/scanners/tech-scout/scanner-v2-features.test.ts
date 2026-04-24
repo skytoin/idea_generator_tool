@@ -93,6 +93,7 @@ function buildExpansionJson(
       'ehr frustration',
       'nurse charting',
     ],
+    huggingface_keywords: [],
     arxiv_categories: ['cs.CL'],
     github_languages: ['python'],
     reddit_subreddits: overrides.reddit_subreddits ?? ['nursing', 'healthIT'],

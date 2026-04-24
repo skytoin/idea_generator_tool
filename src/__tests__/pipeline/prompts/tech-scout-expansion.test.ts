@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   EXPANSION_RESPONSE_SCHEMA,
+  EXPANSION_WIRE_SCHEMA,
   buildExpansionSystemPrompt,
   buildExpansionUserPrompt,
 } from '../../../pipeline/prompts/tech-scout-expansion';
@@ -228,5 +229,99 @@ describe('buildExpansionSystemPrompt — v1.1 quality rules', () => {
     expect(system).toMatch(/preserve the acronym verbatim/i);
     expect(system).toContain('MCP');
     expect(system).toContain('Model Context Protocol');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Regression: EXPANSION_WIRE_SCHEMA must keep every field REQUIRED so the
+// OpenAI strict `response_format` compiler doesn't reject the schema.
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 2026-04-24 regression: `huggingface_keywords` was briefly defined as
+ * `z.array(z.string()).optional().default([])`. That single modifier
+ * compiled to a JSON Schema with the field missing from `required`,
+ * which OpenAI's strict `response_format` rejects:
+ *
+ *   "Invalid schema for response_format 'response': In context=(),
+ *    'required' is required to be supplied and to be an array
+ *    including every key in properties. Missing 'huggingface_keywords'."
+ *
+ * Both the expansion LLM call AND the refine LLM call use this schema,
+ * so the bug took out pass 1 AND pass 2 simultaneously. The scanner
+ * silently fell back to `buildFallbackPlan`, which just clones the
+ * founder's raw directive keywords to every source — producing a run
+ * where every adapter searched for "SAAS", "machine learning", etc.
+ *
+ * The tests below pin two facts so the bug can't come back:
+ *   1. Every top-level field on the wire schema rejects a missing
+ *      entry (i.e., none of them are `.optional()` in disguise).
+ *   2. `huggingface_keywords` specifically must be present.
+ */
+describe('EXPANSION_WIRE_SCHEMA — OpenAI strict compat regression', () => {
+  /** A payload with every field present — baseline success case. */
+  function validPayload() {
+    return {
+      hn_keywords: ['a'],
+      arxiv_keywords: ['b'],
+      github_keywords: ['c'],
+      reddit_keywords: ['d'],
+      huggingface_keywords: ['e'],
+      arxiv_categories: ['cs.LG'],
+      github_languages: ['python'],
+      reddit_subreddits: ['datascience'],
+      domain_tags: ['fintech'],
+    };
+  }
+
+  it('accepts a full payload with every required field present', () => {
+    const result = EXPANSION_WIRE_SCHEMA.safeParse(validPayload());
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a payload missing huggingface_keywords (the bug that caused the 2026-04-24 cascade)', () => {
+    const payload = validPayload() as Record<string, unknown>;
+    delete payload.huggingface_keywords;
+    const result = EXPANSION_WIRE_SCHEMA.safeParse(payload);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a payload missing ANY top-level keyword list (coverage for all fields)', () => {
+    const keys = [
+      'hn_keywords',
+      'arxiv_keywords',
+      'github_keywords',
+      'reddit_keywords',
+      'huggingface_keywords',
+      'arxiv_categories',
+      'github_languages',
+      'reddit_subreddits',
+      'domain_tags',
+    ];
+    for (const k of keys) {
+      const payload = validPayload() as Record<string, unknown>;
+      delete payload[k];
+      const result = EXPANSION_WIRE_SCHEMA.safeParse(payload);
+      expect(result.success, `field ${k} must be required`).toBe(false);
+    }
+  });
+
+  it('accepts empty arrays for every optional-semantic list (strict shape, loose content)', () => {
+    // The fields are REQUIRED in shape but MAY hold empty arrays —
+    // that's how we communicate "no items" without making the field
+    // optional (which would break strict mode).
+    const payload = {
+      hn_keywords: [],
+      arxiv_keywords: [],
+      github_keywords: [],
+      reddit_keywords: [],
+      huggingface_keywords: [],
+      arxiv_categories: [],
+      github_languages: [],
+      reddit_subreddits: [],
+      domain_tags: [],
+    };
+    const result = EXPANSION_WIRE_SCHEMA.safeParse(payload);
+    expect(result.success).toBe(true);
   });
 });

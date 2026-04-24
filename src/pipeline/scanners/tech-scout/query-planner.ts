@@ -232,9 +232,13 @@ export function enforceAcronymPreservation(
  * these appear among expanded_keywords we move them to the END of the list
  * so source adapters (which take `expanded_keywords.slice(0, N)`) hit more
  * specific terms first. This is a defense against LLM responses that list
- * generics first despite the prompt asking for specificity.
+ * generics first despite the prompt asking for specificity. Exported so
+ * the scanner's buildFallbackPlan can reuse the same set when the LLM
+ * call fails and we have to manufacture a plan from the raw directive
+ * keywords — otherwise the fallback would feed every adapter "saas",
+ * "programming", "machine learning" (the 2026-04-24 regression).
  */
-const GENERIC_KEYWORDS: ReadonlySet<string> = new Set([
+export const GENERIC_KEYWORDS: ReadonlySet<string> = new Set([
   'ai',
   'ml',
   'machine learning',

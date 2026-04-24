@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { runTechScout } from '../../../../pipeline/scanners/tech-scout/scanner';
+import {
+  runTechScout,
+  buildFallbackPlan,
+} from '../../../../pipeline/scanners/tech-scout/scanner';
 import { setOpenAIResponse, resetOpenAIMock } from '../../../mocks/openai-mock';
 import {
   setHnResponse,
@@ -471,5 +474,103 @@ describe('runTechScout — MAX_FINAL_SIGNALS cap', () => {
     );
 
     expect(report.signals.length).toBeLessThanOrEqual(25);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// buildFallbackPlan — degrades-gracefully behavior
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('buildFallbackPlan — 2026-04-24 regression', () => {
+  const NOW = new Date('2026-04-24T12:00:00.000Z');
+
+  function directive(
+    overrides: Partial<ScannerDirectives['tech_scout']> = {},
+  ): ScannerDirectives['tech_scout'] {
+    return {
+      keywords: ['tabular forecasting', 'churn prediction', 'saas', 'machine learning'],
+      exclude: [],
+      notes: '',
+      target_sources: ['hn', 'arxiv', 'github', 'reddit', 'huggingface'],
+      timeframe: 'last 6 months',
+      ...overrides,
+    };
+  }
+
+  it('drops GENERIC_KEYWORDS from the cloned lists and keeps only specific terms', () => {
+    const plan = buildFallbackPlan(directive(), NOW);
+    // "saas" and "machine learning" are both in GENERIC_KEYWORDS and must go.
+    expect(plan.hn_keywords).not.toContain('saas');
+    expect(plan.hn_keywords).not.toContain('machine learning');
+    expect(plan.hn_keywords).toContain('tabular forecasting');
+    expect(plan.hn_keywords).toContain('churn prediction');
+  });
+
+  it('clones the specific-only list to every per-source keyword array', () => {
+    const plan = buildFallbackPlan(directive(), NOW);
+    const expected = ['tabular forecasting', 'churn prediction'];
+    expect(plan.hn_keywords).toEqual(expected);
+    expect(plan.arxiv_keywords).toEqual(expected);
+    expect(plan.github_keywords).toEqual(expected);
+    expect(plan.reddit_keywords).toEqual(expected);
+    expect(plan.huggingface_keywords).toEqual(expected);
+  });
+
+  it('populates domain_tags so HuggingFace fallback has useful keywords', () => {
+    const plan = buildFallbackPlan(directive(), NOW);
+    expect(plan.domain_tags.length).toBeGreaterThan(0);
+    expect(plan.domain_tags).toEqual(plan.huggingface_keywords);
+  });
+
+  it('caps the specific list at 5 entries per source', () => {
+    const many = directive({
+      keywords: [
+        'tabular forecasting',
+        'churn prediction',
+        'entity resolution',
+        'agent orchestration',
+        'feature store',
+        'vector retrieval',
+        'streaming anomaly',
+        'record linkage',
+      ],
+    });
+    const plan = buildFallbackPlan(many, NOW);
+    expect(plan.hn_keywords.length).toBeLessThanOrEqual(5);
+  });
+
+  it('falls back to the raw directive keywords when EVERY keyword is generic', () => {
+    // Last-resort guard: if we filtered down to zero, the adapters
+    // would run with no query at all. Keep the generics rather than
+    // ship an empty plan.
+    const allGeneric = directive({
+      keywords: ['saas', 'machine learning', 'programming', 'software'],
+    });
+    const plan = buildFallbackPlan(allGeneric, NOW);
+    expect(plan.hn_keywords.length).toBeGreaterThan(0);
+    expect(plan.hn_keywords).toContain('saas');
+  });
+
+  it('leaves github_languages empty so sanitizer picks up naturally', () => {
+    // Prior version hard-coded ['python'], biasing the fallback toward
+    // python repos. Empty is fine — the HF allowlist-sanitizer keeps
+    // things sensible if a later pass fills the field.
+    const plan = buildFallbackPlan(directive(), NOW);
+    expect(plan.github_languages).toEqual([]);
+  });
+
+  it('leaves reddit_subreddits empty so the adapter injects its startup-universal baseline', () => {
+    const plan = buildFallbackPlan(directive(), NOW);
+    expect(plan.reddit_subreddits).toEqual([]);
+  });
+
+  it('sets a 6-month-backward timeframe_iso from `now`', () => {
+    const plan = buildFallbackPlan(directive(), NOW);
+    const cutoff = new Date(plan.timeframe_iso);
+    const diffMs = NOW.getTime() - cutoff.getTime();
+    // Roughly 6 months (allow ±5 days of calendar wobble).
+    const sixMonthsMs = 6 * 30 * 24 * 3_600_000;
+    expect(diffMs).toBeGreaterThan(sixMonthsMs - 5 * 24 * 3_600_000);
+    expect(diffMs).toBeLessThan(sixMonthsMs + 5 * 24 * 3_600_000);
   });
 });

@@ -31,7 +31,19 @@ const HF_USER_AGENT =
  * ~3-6s, well under the 60s per-source timeout.
  */
 const MAX_KEYWORD_QUERIES_PER_SURFACE = 3;
-const DAILY_PAPERS_DAYS = 7;
+
+/**
+ * How many days of Daily Papers history we fan out across. Bumped
+ * from 7 → 21 on 2026-04-24 because a single week was only surfacing
+ * the freshest papers while missing longer-lived but still-relevant
+ * work. Daily Papers content is scoped per-day (a paper appears on
+ * the day it's promoted to the feed), so a 21-day window captures ~3×
+ * the curated research bounty without redundancy. Budget: 21 daily
+ * calls × ~200ms latency + 20 × 600ms inter-query sleep ≈ 16s, still
+ * well under the 60s per-source timeout even after the 2× pass
+ * multiplier.
+ */
+const DAILY_PAPERS_DAYS = 21;
 
 /** Maximum items requested per listing call. HF caps at 100. */
 const HF_LIMIT = 50;
@@ -454,29 +466,125 @@ function extractItems(surface: Surface, body: unknown): unknown[] {
 }
 
 /**
- * Convert a model record into a canonical Signal. Title is the
- * `id` (e.g. "Qwen/Qwen3.6-35B"), URL is the model's HF page,
- * snippet combines pipeline_tag + top tags + likes/downloads as a
- * compact engagement summary the enricher can score. Category is
- * `tech_capability` because models represent newly-shipped abilities.
+ * Tag prefixes that carry semantic meaning for relevance scoring.
+ * The enricher LLM can use these to understand WHAT a model does
+ * rather than just its format. Order matters for the summary — we
+ * surface them in this order so the most informative (dataset +
+ * base_model) land first.
+ */
+const MODEL_SEMANTIC_TAG_PREFIXES = [
+  'dataset:',
+  'base_model:',
+  'language:',
+  'arxiv:',
+] as const;
+
+/**
+ * Non-informative model tags that waste snippet budget. These are
+ * format/framework/region tags that tell the enricher nothing about
+ * what the model DOES or is ABOUT. We strip them before picking
+ * "topic" tags so genuinely-semantic tags like `instruction-tuned`,
+ * `qlora`, or `retrieval` get surface area.
+ */
+const MODEL_NOISE_TAGS = new Set([
+  'transformers',
+  'safetensors',
+  'pytorch',
+  'tensorflow',
+  'tf',
+  'jax',
+  'onnx',
+  'gguf',
+  'custom_code',
+  'endpoints_compatible',
+  'eval-results',
+  'text-generation-inference',
+]);
+
+/**
+ * Extract a prefixed tag's value (e.g., `dataset:Shopify/ShopQA`
+ * → `Shopify/ShopQA`). Returns undefined when no tag matches the
+ * prefix. Used to pull structured semantic hints out of the model's
+ * tag list without fetching the README.
+ */
+function extractPrefixedTag(tags: readonly string[], prefix: string): string | undefined {
+  const match = tags.find((t) => t.startsWith(prefix));
+  return match?.slice(prefix.length).trim() || undefined;
+}
+
+/**
+ * Collect ALL prefixed tag values for a given prefix (e.g. multiple
+ * `language:` tags). Used for fields that can carry multiple values
+ * in the tag list.
+ */
+function extractAllPrefixedTags(tags: readonly string[], prefix: string): string[] {
+  return tags
+    .filter((t) => t.startsWith(prefix))
+    .map((t) => t.slice(prefix.length).trim())
+    .filter((t) => t.length > 0);
+}
+
+/**
+ * Pick the top N topic tags — tags that are NOT prefixed (not
+ * `dataset:`, `license:`, `region:`, etc.) AND not in the
+ * format/framework noise list. These are usually content-bearing
+ * words like `instruction-tuned`, `qlora`, `medical`, `code`,
+ * `retrieval` that tell the enricher what the model is about.
+ */
+function pickTopicTags(tags: readonly string[], max: number): string[] {
+  return tags
+    .filter((t) => !t.includes(':') && !MODEL_NOISE_TAGS.has(t.toLowerCase()))
+    .slice(0, max);
+}
+
+/**
+ * Convert a model record into a canonical Signal with a semantically
+ * RICH snippet. Pre-Tier-2 snippets only included format/engagement
+ * stats ("transformers; 42 likes"), which gave the enricher no
+ * signal to judge relevance from — models consistently lost the
+ * enrichment tournament to Daily Papers (which ship with ai_summary
+ * pre-baked). New snippet pulls semantic signal out of the tag list:
+ * `dataset:`, `base_model:`, `language:`, `arxiv:` prefixes plus
+ * non-noise topic tags. No extra HTTP request — all fields are in
+ * the listing response we already fetch.
+ *
+ * Example before: "model text-generation (transformers); 42 likes,
+ *   1200 downloads, trending=50; tags: transformers, safetensors"
+ * Example after:  "text-generation model by Qwen; based on
+ *   meta-llama/Llama-3-8B; trained on Shopify/ShopQA; languages: en;
+ *   topics: instruction-tuned, qlora; paper: arxiv:2402.12345;
+ *   42 likes, 1200 downloads, trending=50"
  */
 function normalizeModel(m: HfModel): Signal {
   const id = m.id;
   const url = `${HF_BASE_URL}/${id}`;
   const pipeline = m.pipeline_tag ?? 'unknown-task';
-  const lib = m.library_name ?? 'unknown-lib';
+  const author = m.author ?? 'unknown';
   const downloads = m.downloads ?? 0;
   const likes = m.likes ?? 0;
   const trending = m.trendingScore ?? 0;
-  const topTags = (m.tags ?? []).filter((t) => !t.includes(':')).slice(0, 5).join(', ');
-  const snippet = `model ${pipeline} (${lib}); ${likes} likes, ${downloads} downloads, trending=${trending}${topTags ? `; tags: ${topTags}` : ''}`;
+  const tags = m.tags ?? [];
+  const dataset = extractPrefixedTag(tags, 'dataset:');
+  const baseModel = extractPrefixedTag(tags, 'base_model:');
+  const languages = extractAllPrefixedTags(tags, 'language:').join(',');
+  const arxivRef = extractPrefixedTag(tags, 'arxiv:');
+  const topics = pickTopicTags(tags, 3).join(', ');
+
+  const parts: string[] = [`${pipeline} model by ${author}`];
+  if (baseModel) parts.push(`based on ${baseModel}`);
+  if (dataset) parts.push(`trained on ${dataset}`);
+  if (languages) parts.push(`languages: ${languages}`);
+  if (topics) parts.push(`topics: ${topics}`);
+  if (arxivRef) parts.push(`paper: arxiv:${arxivRef}`);
+  parts.push(`${likes} likes, ${downloads} downloads, trending=${trending}`);
+
   const date = m.lastModified ?? m.createdAt ?? null;
   return {
     source: 'huggingface',
     title: id,
     url,
     date,
-    snippet,
+    snippet: parts.join('; '),
     score: { novelty: 5, specificity: 5, recency: 5, relevance: 5 },
     category: 'tech_capability',
     raw: m,
@@ -488,23 +596,38 @@ function normalizeModel(m: HfModel): Signal {
  * demos so `category` = `product_launch` (the closest match in the
  * existing taxonomy). Title prefers `cardData.title` (human-friendly)
  * and falls back to `id`. URL points to the runnable demo page.
+ *
+ * Snippet LEADS with the author-provided description (the richest
+ * semantic signal — usually one sentence explaining what the demo
+ * does: "generate a video from an image with a text prompt"). Earlier
+ * form buried the description behind engagement stats, so the enricher
+ * was scoring by likes/sdk rather than by what the thing actually
+ * does. Now description first → engagement stats last.
  */
 function normalizeSpace(s: HfSpace): Signal {
   const id = s.id;
   const url = `${HF_BASE_URL}/spaces/${id}`;
   const title = s.cardData?.title?.trim() ? s.cardData.title : id;
-  const description = s.cardData?.short_description ?? '';
+  const description = (s.cardData?.short_description ?? '').trim();
   const sdk = s.sdk ?? s.cardData?.sdk ?? 'unknown-sdk';
+  const author = s.author ?? 'unknown';
   const likes = s.likes ?? 0;
   const trending = s.trendingScore ?? 0;
-  const snippet = `space (${sdk}); ${likes} likes, trending=${trending}${description ? `; ${description}` : ''}`;
+  const topics = pickTopicTags(s.tags ?? [], 3).join(', ');
+
+  const parts: string[] = [];
+  if (description) parts.push(description);
+  parts.push(`${sdk} Space by ${author}`);
+  if (topics) parts.push(`tags: ${topics}`);
+  parts.push(`${likes} likes, trending=${trending}`);
+
   const date = s.lastModified ?? s.createdAt ?? null;
   return {
     source: 'huggingface',
     title,
     url,
     date,
-    snippet,
+    snippet: parts.join('; '),
     score: { novelty: 5, specificity: 5, recency: 5, relevance: 5 },
     category: 'product_launch',
     raw: s,

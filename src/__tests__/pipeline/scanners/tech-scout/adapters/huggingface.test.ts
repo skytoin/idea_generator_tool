@@ -154,15 +154,15 @@ const noSleep = (): Promise<void> => Promise.resolve();
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('huggingfaceAdapter.planQueries — happy path', () => {
-  it('emits 3 model + 3 space + 7 daily-paper queries with the expected labels', () => {
+  it('emits 3 model + 3 space + 21 daily-paper queries with the expected labels', () => {
     const queries = huggingfaceAdapter.planQueries(buildPlan(), buildDirective());
-    expect(queries.length).toBe(13);
+    expect(queries.length).toBe(27);
     const modelLabels = queries.filter((q) => q.label.startsWith('hf-models:'));
     const spaceLabels = queries.filter((q) => q.label.startsWith('hf-spaces:'));
     const paperLabels = queries.filter((q) => q.label.startsWith('hf-papers:'));
     expect(modelLabels).toHaveLength(3);
     expect(spaceLabels).toHaveLength(3);
-    expect(paperLabels).toHaveLength(7);
+    expect(paperLabels).toHaveLength(21);
   });
 
   it('every model query carries _surface=models and the search keyword', () => {
@@ -191,7 +191,7 @@ describe('huggingfaceAdapter.planQueries — happy path', () => {
   it('every daily-paper query carries _surface=daily_papers and a YYYY-MM-DD _date', () => {
     const queries = huggingfaceAdapter.planQueries(buildPlan(), buildDirective());
     const papers = queries.filter((q) => String(q.params._surface) === 'daily_papers');
-    expect(papers).toHaveLength(7);
+    expect(papers).toHaveLength(21);
     for (const p of papers) {
       expect(typeof p.params._date).toBe('string');
       expect(String(p.params._date)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -242,7 +242,7 @@ describe('huggingfaceAdapter.planQueries — happy path', () => {
       buildDirective(),
     );
     const papers = queries.filter((q) => String(q.params._surface) === 'daily_papers');
-    expect(papers).toHaveLength(7);
+    expect(papers).toHaveLength(21);
   });
 
   it('all queries set limit per surface (50 listings, 50 papers)', () => {
@@ -747,6 +747,58 @@ describe('huggingfaceAdapter.normalize', () => {
     expect(SIGNAL_SCHEMA.safeParse(sig).success).toBe(true);
   });
 
+  it('model snippet surfaces semantic tags (dataset:, base_model:, language:, arxiv:) when present', () => {
+    const rich = buildModel({
+      id: 'acme/churn-lm',
+      tags: [
+        'transformers',
+        'safetensors',
+        'dataset:acme/customers',
+        'base_model:meta-llama/Llama-3-8B',
+        'language:en',
+        'language:de',
+        'arxiv:2402.12345',
+        'instruction-tuned',
+        'qlora',
+      ],
+    });
+    const sig = huggingfaceAdapter.normalize({
+      source: 'huggingface',
+      data: { _surface: 'models', raw: rich },
+    });
+    expect(sig.snippet).toContain('based on meta-llama/Llama-3-8B');
+    expect(sig.snippet).toContain('trained on acme/customers');
+    expect(sig.snippet).toContain('languages: en,de');
+    expect(sig.snippet).toContain('paper: arxiv:2402.12345');
+    expect(sig.snippet).toContain('topics: instruction-tuned, qlora');
+  });
+
+  it('model snippet strips framework/noise tags (transformers, safetensors) from topics list', () => {
+    const m = buildModel({
+      tags: ['transformers', 'safetensors', 'pytorch', 'retrieval', 'medical'],
+    });
+    const sig = huggingfaceAdapter.normalize({
+      source: 'huggingface',
+      data: { _surface: 'models', raw: m },
+    });
+    expect(sig.snippet).toContain('retrieval');
+    expect(sig.snippet).toContain('medical');
+    // noise tags should NOT surface as topics
+    expect(sig.snippet).not.toMatch(/topics:.*transformers/);
+    expect(sig.snippet).not.toMatch(/topics:.*safetensors/);
+  });
+
+  it('model snippet gracefully skips absent semantic fields (no crash, no "undefined")', () => {
+    const bare = buildModel({ tags: ['transformers'] });
+    const sig = huggingfaceAdapter.normalize({
+      source: 'huggingface',
+      data: { _surface: 'models', raw: bare },
+    });
+    expect(sig.snippet).not.toContain('undefined');
+    expect(sig.snippet).not.toContain('based on');
+    expect(sig.snippet).not.toContain('trained on');
+  });
+
   it('converts a space wrapper into a Signal with category=product_launch and /spaces/ URL', () => {
     const raw: RawItem = {
       source: 'huggingface',
@@ -758,6 +810,22 @@ describe('huggingfaceAdapter.normalize', () => {
     expect(sig.category).toBe('product_launch');
     expect(sig.snippet).toContain('gradio');
     expect(SIGNAL_SCHEMA.safeParse(sig).success).toBe(true);
+  });
+
+  it('space snippet LEADS with the short_description so the enricher sees content first', () => {
+    // Pre-Tier-2 regression: description was at the END of the
+    // snippet, buried after engagement stats. Enricher scored by
+    // likes/sdk instead of by what the demo does. Now description
+    // leads → enricher's first characters communicate the content.
+    const s = buildSpace({
+      id: 'foo/video-gen',
+      description: 'generate a video from an image with a text prompt',
+    });
+    const sig = huggingfaceAdapter.normalize({
+      source: 'huggingface',
+      data: { _surface: 'spaces', raw: s },
+    });
+    expect(sig.snippet.startsWith('generate a video')).toBe(true);
   });
 
   it('falls back to space.id when cardData.title is empty', () => {

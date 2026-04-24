@@ -47,13 +47,17 @@ const HF_DAILY_PAPERS_LIMIT = 50;
 const HF_SLEEP_MS = 600;
 
 /**
- * Engagement floors applied client-side per surface. Models with <5
- * likes and Spaces with <10 likes are usually toy uploads — surfacing
- * them spends enricher tokens on noise. Daily Papers ALWAYS pass
- * through because they were already curated by the HF community.
+ * Engagement floors applied client-side per surface. Set to 1 rather
+ * than a higher cutoff because the 2026-04-24 run showed that search
+ * queries on precise terms (like "RAG evaluation" or "customer
+ * churn") often return top-trending results with 0-4 likes — still
+ * on-topic, just in niche areas the community hasn't liked yet. A
+ * floor of 1 only rejects the literal-zero-engagement abandoned
+ * uploads while letting the enricher score the rest on relevance.
+ * Daily Papers ALWAYS pass through because HF curates them.
  */
-const MIN_MODEL_LIKES = 5;
-const MIN_SPACE_LIKES = 10;
+const MIN_MODEL_LIKES = 1;
+const MIN_SPACE_LIKES = 1;
 
 /**
  * Maximum length of the Daily Papers `ai_summary` we keep as the
@@ -223,12 +227,19 @@ function buildListingParams(
  * Build params for ONE Daily Papers query. The `_date` transport
  * field carries the YYYY-MM-DD slug used in the `?date=` param. The
  * listing IS the date — there is no `?search=` param on Daily Papers.
+ *
+ * Intentionally DOES NOT set a `sort` param. The 2026-04-24 run
+ * surfaced that `sort=hot` + `date=YYYY-MM-DD` returns HTTP 400 — the
+ * "hot" algorithm is only valid on the aggregate view without a
+ * date filter. When `date` is specified the API already returns that
+ * day's papers in a sensible order; any `sort` other than
+ * `publishedAt` / `rising` / `new` causes a 400 that aborts all 7
+ * daily-paper calls and marks the whole HF source as failed.
  */
 function buildDailyPapersParams(date: string): Record<string, unknown> {
   return {
     _surface: 'daily_papers',
     _date: date,
-    sort: 'hot',
     limit: String(HF_DAILY_PAPERS_LIMIT),
   };
 }

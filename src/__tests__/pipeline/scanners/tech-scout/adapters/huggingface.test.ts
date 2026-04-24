@@ -195,7 +195,17 @@ describe('huggingfaceAdapter.planQueries — happy path', () => {
     for (const p of papers) {
       expect(typeof p.params._date).toBe('string');
       expect(String(p.params._date)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(p.params.sort).toBe('hot');
+    }
+  });
+
+  it('daily-paper queries do NOT set sort= (HF returns 400 when sort=hot combines with date=)', () => {
+    // 2026-04-24 regression: `sort=hot` + `date=YYYY-MM-DD` → HTTP 400
+    // which aborted all 7 daily-paper calls and marked the whole HF
+    // source as `failed`. The default order is fine for a day's view.
+    const queries = huggingfaceAdapter.planQueries(buildPlan(), buildDirective());
+    const papers = queries.filter((q) => String(q.params._surface) === 'daily_papers');
+    for (const p of papers) {
+      expect(p.params.sort).toBeUndefined();
     }
   });
 
@@ -327,7 +337,6 @@ describe('huggingfaceAdapter.fetch — URL construction', () => {
           params: {
             _surface: 'daily_papers',
             _date: '2026-04-23',
-            sort: 'hot',
             limit: '50',
           },
         },
@@ -373,10 +382,14 @@ describe('huggingfaceAdapter.fetch — parsing and engagement floor', () => {
     }
   });
 
-  it('drops models below MIN_MODEL_LIKES (5)', async () => {
+  it('drops models with 0 likes (MIN_MODEL_LIKES = 1: only literal-zero-engagement entries are cut)', async () => {
+    // 2026-04-24 tuning: engagement floor dropped from 5 → 1 because
+    // precise search terms (e.g. "RAG evaluation", "customer churn")
+    // return top-trending results with 0-4 likes that are still
+    // on-topic. Floor=1 rejects only the abandoned-upload junk.
     setHuggingfaceResponse('hf-low', [
       buildModel({ id: 'good/model', likes: 100 }),
-      buildModel({ id: 'low/model', likes: 2 }),
+      buildModel({ id: 'dead/model', likes: 0 }),
     ]);
     vi.stubEnv('TECH_SCOUT_SCENARIO_HF', 'hf-low');
     const items = await fetchQueries(
@@ -388,10 +401,21 @@ describe('huggingfaceAdapter.fetch — parsing and engagement floor', () => {
     expect(((items[0]!.data as { raw: { id: string } }).raw).id).toBe('good/model');
   });
 
-  it('drops spaces below MIN_SPACE_LIKES (10)', async () => {
+  it('keeps low-engagement models (likes=2) so niche search results survive', async () => {
+    setHuggingfaceResponse('hf-niche', [buildModel({ id: 'niche/model', likes: 2 })]);
+    vi.stubEnv('TECH_SCOUT_SCENARIO_HF', 'hf-niche');
+    const items = await fetchQueries(
+      [{ label: 'hf-models: "x"', params: { _surface: 'models', search: 'x' } }],
+      { timeoutMs: 10_000 },
+      noSleep,
+    );
+    expect(items).toHaveLength(1);
+  });
+
+  it('drops spaces with 0 likes (MIN_SPACE_LIKES = 1)', async () => {
     setHuggingfaceResponse('hf-spaces-low', [
       buildSpace({ id: 'good/space', likes: 50 }),
-      buildSpace({ id: 'low/space', likes: 3 }),
+      buildSpace({ id: 'dead/space', likes: 0 }),
     ]);
     vi.stubEnv('TECH_SCOUT_SCENARIO_HF', 'hf-spaces-low');
     const items = await fetchQueries(

@@ -82,6 +82,7 @@ const SOURCE_ALIAS_TO_ADAPTER_NAME: Record<string, string> = {
   github: 'github',
   reddit: 'reddit',
   huggingface: 'huggingface',
+  cloudflare: 'cloudflare',
   // 'producthunt' is in the schema enum but intentionally unmapped
   // because no adapter exists yet.
 };

@@ -99,6 +99,7 @@ export type ScannerDeps = {
     github?: string;
     reddit?: string;
     huggingface?: string;
+    cloudflare?: string;
     skill_remix?: string;
     adjacent_worlds?: string;
     refine?: string;

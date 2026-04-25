@@ -3,6 +3,7 @@ import { arxivAdapter } from './arxiv';
 import { githubAdapter } from './github';
 import { redditAdapter } from './reddit';
 import { huggingfaceAdapter } from './huggingface';
+import { cloudflareRadarAdapter } from './cloudflare-radar';
 import type { SourceAdapter } from '../../types';
 
 /**
@@ -15,6 +16,7 @@ export const TECH_SCOUT_ADAPTERS: readonly SourceAdapter[] = [
   githubAdapter,
   redditAdapter,
   huggingfaceAdapter,
+  cloudflareRadarAdapter,
 ];
 
 export {
@@ -23,4 +25,5 @@ export {
   githubAdapter,
   redditAdapter,
   huggingfaceAdapter,
+  cloudflareRadarAdapter,
 };

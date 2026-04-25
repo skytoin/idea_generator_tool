@@ -116,6 +116,19 @@ const RAW_ITEM_FIXTURES: Record<string, RawItem> = {
       },
     },
   },
+  cloudflare: {
+    source: 'cloudflare',
+    data: {
+      _surface: 'trending_rise',
+      raw: {
+        domain: 'conformance.test',
+        rank: 42,
+        pctRankChange: 25,
+        categories: [{ id: 1, name: 'Test', superCategoryId: 0 }],
+      },
+      lastUpdated: '2026-04-25T00:00:00.000Z',
+    },
+  },
 };
 
 describe('adapter interface conformance', () => {

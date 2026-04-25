@@ -6,16 +6,18 @@ import {
   githubAdapter,
   redditAdapter,
   huggingfaceAdapter,
+  cloudflareRadarAdapter,
 } from '../../../../../pipeline/scanners/tech-scout/adapters';
 
 describe('TECH_SCOUT_ADAPTERS', () => {
-  it('contains exactly 5 adapters in HN → arxiv → GitHub → Reddit → Hugging Face order', () => {
-    expect(TECH_SCOUT_ADAPTERS).toHaveLength(5);
+  it('contains exactly 6 adapters in HN → arxiv → GitHub → Reddit → HF → Cloudflare Radar order', () => {
+    expect(TECH_SCOUT_ADAPTERS).toHaveLength(6);
     expect(TECH_SCOUT_ADAPTERS[0]).toBe(hnAlgoliaAdapter);
     expect(TECH_SCOUT_ADAPTERS[1]).toBe(arxivAdapter);
     expect(TECH_SCOUT_ADAPTERS[2]).toBe(githubAdapter);
     expect(TECH_SCOUT_ADAPTERS[3]).toBe(redditAdapter);
     expect(TECH_SCOUT_ADAPTERS[4]).toBe(huggingfaceAdapter);
+    expect(TECH_SCOUT_ADAPTERS[5]).toBe(cloudflareRadarAdapter);
   });
 
   it('every adapter has a unique name', () => {
@@ -29,6 +31,7 @@ describe('TECH_SCOUT_ADAPTERS', () => {
     expect(githubAdapter.name).toBe('github');
     expect(redditAdapter.name).toBe('reddit');
     expect(huggingfaceAdapter.name).toBe('huggingface');
+    expect(cloudflareRadarAdapter.name).toBe('cloudflare');
   });
 
   it('every adapter conforms to the SourceAdapter interface', () => {

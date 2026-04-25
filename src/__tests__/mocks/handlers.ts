@@ -6,6 +6,7 @@ import {
   getGithubResponse,
   getRedditResponse,
   getHuggingfaceResponse,
+  getCloudflareRadarResponse,
 } from './scanner-mocks';
 
 /** Mock Anthropic API response */
@@ -290,6 +291,51 @@ export const huggingfaceDailyPapersHandler = http.get(
   ({ request }) => buildHuggingfaceScenarioResponse(request),
 );
 
+/**
+ * Build the shared scenario-routing response for Cloudflare Radar
+ * handlers. All Radar paths (ranking, services, ai bots) share one
+ * scenario registry — tests register a body specific to whatever
+ * surface they're exercising. Pass `{ __denied: <code> }` to
+ * simulate a 401/403/429 path.
+ */
+function buildCloudflareScenarioResponse(request: Request): Response {
+  const scenario = request.headers.get('x-test-scenario');
+  if (scenario) {
+    const body = getCloudflareRadarResponse(scenario);
+    if (body && typeof body === 'object' && '__denied' in body) {
+      const denied = (body as { __denied: number }).__denied;
+      return new HttpResponse(
+        JSON.stringify({ success: false, errors: [{ code: denied, message: 'denied' }] }),
+        { status: denied, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    if (body !== undefined) return HttpResponse.json(body);
+  }
+  // No scenario registered → empty result envelope (consistent with
+  // an authenticated-but-no-data response).
+  return HttpResponse.json({ success: true, errors: [], result: { top_0: [] } });
+}
+
+export const cloudflareRadarTopHandler = http.get(
+  'https://api.cloudflare.com/client/v4/radar/ranking/top',
+  ({ request }) => buildCloudflareScenarioResponse(request),
+);
+
+export const cloudflareRadarServicesHandler = http.get(
+  'https://api.cloudflare.com/client/v4/radar/ranking/internet_services/top',
+  ({ request }) => buildCloudflareScenarioResponse(request),
+);
+
+export const cloudflareRadarAiBotsUserAgentHandler = http.get(
+  'https://api.cloudflare.com/client/v4/radar/ai/bots/summary/user_agent',
+  ({ request }) => buildCloudflareScenarioResponse(request),
+);
+
+export const cloudflareRadarAiBotsContentTypeHandler = http.get(
+  'https://api.cloudflare.com/client/v4/radar/ai/bots/summary/content_type',
+  ({ request }) => buildCloudflareScenarioResponse(request),
+);
+
 export const handlers = [
   anthropicHandler,
   openaiChatHandler,
@@ -304,4 +350,8 @@ export const handlers = [
   huggingfaceModelsHandler,
   huggingfaceSpacesHandler,
   huggingfaceDailyPapersHandler,
+  cloudflareRadarTopHandler,
+  cloudflareRadarServicesHandler,
+  cloudflareRadarAiBotsUserAgentHandler,
+  cloudflareRadarAiBotsContentTypeHandler,
 ];
